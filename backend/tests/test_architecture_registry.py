@@ -44,7 +44,7 @@ def test_registry_has_three_agents_five_kernels_and_no_drift():
     assert set(ACTION_BOARD) == set(CAPABILITY_OWNERS)
     assert validate_registry() == []
     manifest = registry_manifest()
-    assert REGISTRY_VERSION == "2026-09-02.5"
+    assert REGISTRY_VERSION == "2026-09-02.6"
     assert manifest["schema_valid"] is True
     assert manifest["valid"] is (
         manifest["schema_valid"] and manifest["implementation_valid"]
@@ -634,6 +634,57 @@ def test_frontend_learning_skill_manifest_matches_registry_authority():
     path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "generated" / "learning-skill-manifest.json"
     registry_payload = json.loads(json.dumps(frontend_learning_skill_manifest(), ensure_ascii=False))
     assert json.loads(path.read_text(encoding="utf-8")) == registry_payload
+
+
+def test_desktop_pet_is_registered_without_kernel_or_evidence_writes():
+    pet_capabilities = {
+        "desktop_pet_companion", "desktop_pet_task_control",
+        "desktop_pet_main_navigation", "desktop_pet_context_attachment",
+    }
+    assert "desktop_pet" in WORKBENCHES
+    workbench = WORKBENCHES["desktop_pet"]
+    assert workbench.surface == "tauri://pet"
+    assert workbench.owner_agent == "tutor_agent"
+    assert workbench.origin == "desktop"
+    assert "coordinate_vnext_agent_turn" in workbench.capabilities
+    assert pet_capabilities <= set(workbench.capabilities)
+    assert pet_capabilities <= set(ACTION_BOARD)
+    assert pet_capabilities <= set(CAPABILITY_OWNERS)
+    for capability in pet_capabilities:
+        assert CAPABILITY_OWNERS[capability] == (
+            "tutor_agent", "desktop_pet_gateway", "desktop_pet",
+        )
+    assert TOOL_INTERFACE_ROLES["desktop_pet_gateway"] == "adapter"
+    assert TOOL_INTERFACE_ROLES["desktop_pet_vision_observer"] == "adapter"
+    assert TOOL_MODEL_EXPOSURE["desktop_pet_gateway"] == "not_model_callable"
+    assert TOOL_MODEL_EXPOSURE["desktop_pet_vision_observer"] == "not_model_callable"
+    assert TOOLS["desktop_pet_gateway"].writes_kernels == ()
+    assert TOOLS["desktop_pet_vision_observer"].writes_kernels == ()
+    assert "EvidenceEvent" in TOOLS["desktop_pet_gateway"].write_path
+    assert "KernelState" in TOOLS["desktop_pet_gateway"].write_path
+    assert "never enter AgentMessage" in TOOLS["desktop_pet_vision_observer"].write_path
+    # Backend capability surface is already published (routes exist); the pet
+    # window frontend component is staged behind Phase 6, so the workbench is
+    # optional_unimplemented while its capabilities stay available.
+    manifest = registry_manifest()
+    workbench_rows = {row["id"]: row for row in manifest["workbenches"]}
+    capability_rows = {row["capability"]: row for row in manifest["capabilities"]}
+    assert workbench_rows["desktop_pet"]["lifecycle"] == "optional_unimplemented"
+    assert workbench_rows["desktop_pet"]["binding_ids"] == []
+    assert workbench_rows["desktop_pet"]["available"] is False
+    assert workbench_rows["desktop_pet"]["lifecycle_note"]
+    for capability in pet_capabilities:
+        assert capability_rows[capability]["lifecycle"] == "implemented"
+        assert capability_rows[capability]["binding_ids"] == [
+            "api:pet.bootstrap", "api:pet.context", "api:pet.selection_text",
+        ]
+        assert capability_rows[capability]["available"] is True
+        assert capability in manifest["available_capabilities"]
+    assert capability_rows["desktop_pet_context_attachment"]["workbench"] == "desktop_pet"
+    # A desktop pet registration must never introduce a new kernel writer.
+    assert {
+        tool.id for tool in TOOLS.values() if tool.writes_kernels
+    } == {"five_kernel_reducer"}
 
 
 def test_learner_growth_is_an_additive_read_only_workbench():
