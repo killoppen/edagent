@@ -74,6 +74,9 @@ EXTRA_COLUMNS = {
         ("idle_expires_at", "DATETIME"),
         ("revoked_reason", "TEXT"),
     ],
+    "desktop_pet_context_packages": [
+        ("client_context_id", "TEXT"),
+    ],
     "checkpoints": [
         ("brief", "TEXT"),        # CheckpointBrief handoff contract (T2)
         ("archived", "BOOLEAN"), # T10: removed-but-kept checkpoints
@@ -175,6 +178,7 @@ PERSONAL_CONCEPT_GRAPH_MIGRATION = "v17-personal-concept-learning-graph"
 ASSESSMENT_BLUEPRINT_MIGRATION = "v18-assessment-blueprint-rubric"
 AUTH_PHASE_A_MIGRATION = "v19-auth-rbac-phase-a"
 DOMAIN_KNOWLEDGE_MIGRATION = "v20-domain-knowledge-supply"
+DESKTOP_PET_MIGRATION = "v21-desktop-pet"
 
 
 def _sqlite_path() -> Path | None:
@@ -654,6 +658,11 @@ async def _ensure_columns():
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_session_checkpoint_scope_idx "
             "ON agent_sessions (learner_id, project_id, checkpoint_id) "
             "WHERE session_type = 'checkpoint' AND status = 'active'"
+        ))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_desktop_pet_context_learner_client_idx "
+            "ON desktop_pet_context_packages (learner_id, client_context_id) "
+            "WHERE client_context_id IS NOT NULL"
         ))
 
 
@@ -1534,6 +1543,21 @@ async def _backfill_personal_concept_graph():
         print(f"[migrate] applied {PERSONAL_CONCEPT_GRAPH_MIGRATION}: {created} concept observations")
 
 
+async def _mark_desktop_pet_migration():
+    """Record the additive desktop-pet tables after create_all created them."""
+    from app.models.learning import SchemaMigration
+
+    async with async_session() as db:
+        applied = (await db.execute(select(SchemaMigration).where(
+            SchemaMigration.version == DESKTOP_PET_MIGRATION
+        ))).scalar_one_or_none()
+        if applied:
+            return
+        db.add(SchemaMigration(version=DESKTOP_PET_MIGRATION))
+        await db.commit()
+        print(f"[migrate] applied {DESKTOP_PET_MIGRATION}")
+
+
 async def init_db():
     _backup_before_five_kernel_migration()
     _backup_before_project_proposal_migration()
@@ -1569,3 +1593,4 @@ async def init_db():
     await _backfill_personal_concept_graph()
     await _mark_assessment_blueprint_migration()
     await _backfill_domain_knowledge_supply()
+    await _mark_desktop_pet_migration()

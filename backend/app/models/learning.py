@@ -894,3 +894,56 @@ class SchemaMigration(Base):
     id = Column(Integer, primary_key=True)
     version = Column(String(100), nullable=False, unique=True)
     applied_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DesktopPetCapability(Base):
+    """Short-lived, least-privilege credentials for the Tauri pet WebView.
+
+    The raw capability is never stored.  It remains valid only while the
+    parent desktop auth session and account epoch remain valid.
+    """
+
+    __tablename__ = "desktop_pet_capabilities"
+    __table_args__ = (
+        Index("ix_desktop_pet_capabilities_active", "auth_session_id", "expires_at"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    auth_session_id = Column(Integer, ForeignKey("auth_sessions.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("user_accounts.id"), nullable=False, index=True)
+    learner_id = Column(Integer, ForeignKey("learners.id"), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    scopes = Column(JSON, default=list, nullable=False)
+    auth_epoch = Column(Integer, default=0, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    revoked_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DesktopPetContextPackage(Base):
+    """TTL-bound external context explicitly confirmed for one Tutor turn.
+
+    Raw content is temporary and is removed as soon as a package is consumed
+    or expires.  The remaining receipt is operational provenance, not a
+    learning artifact or evidence event.
+    """
+
+    __tablename__ = "desktop_pet_context_packages"
+    __table_args__ = (
+        Index("ix_desktop_pet_context_expiry", "learner_id", "status", "expires_at"),
+    )
+
+    id = Column(String(64), primary_key=True)
+    learner_id = Column(Integer, ForeignKey("learners.id"), nullable=False, index=True)
+    client_context_id = Column(String(160), nullable=True)
+    session_id = Column(Integer, ForeignKey("agent_sessions.id"), nullable=True, index=True)
+    kind = Column(String(40), nullable=False)
+    status = Column(String(24), nullable=False, default="pending", index=True)
+    content = Column(Text, nullable=True)
+    content_sha256 = Column(String(64), nullable=False)
+    source = Column(JSON, default=dict, nullable=False)
+    confirmed_at = Column(DateTime, nullable=True)
+    consumed_at = Column(DateTime, nullable=True)
+    consumed_by_turn_id = Column(String(160), nullable=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
