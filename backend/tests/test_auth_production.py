@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.db.database import async_session
 from app.main import app
 from app.models.learning import (
+    AgentMessage,
     AuthLoginAttempt,
     AuthSession,
     DesktopPetCapability,
@@ -1136,6 +1137,43 @@ def test_desktop_pet_capability_least_privilege_bootstrap_and_context_lifecycle(
         assert document_confirmed.status_code == 200, document_confirmed.text
         assert document_confirmed.json()["status"] == "confirmed"
 
+        reply = client.post(
+            f"/api/agent/sessions/{session_id}/turns",
+            headers=pet_headers,
+            json={
+                "message": "请根据我确认的外部参考，用自己的话解释。",
+                "client_turn_id": "desktop-pet-context-turn-001",
+                "context": {"surface": "desktop_pet"},
+                "context_refs": [context_id, document_context_id],
+            },
+        )
+        assert reply.status_code == 200, reply.text
+        # Restricted pet turn cannot pivot scope or act; context_refs rejected for browsers.
+        pivot = client.post(
+            f"/api/agent/sessions/{session_id}/turns",
+            headers=pet_headers,
+            json={"message": "换个项目聊聊", "client_turn_id": "desktop-pet-turn-pivot",
+                  "project_id": 999},
+        )
+        assert pivot.status_code == 403, pivot.text
+        no_client_turn = client.post(
+            f"/api/agent/sessions/{session_id}/turns",
+            headers=pet_headers,
+            json={"message": "没有幂等键的桌宠消息"},
+        )
+        assert no_client_turn.status_code == 422, no_client_turn.text
+        replay = client.post(
+            f"/api/agent/sessions/{session_id}/turns",
+            headers=pet_headers,
+            json={
+                "message": "请根据我确认的外部参考，用自己的话解释。",
+                "client_turn_id": "desktop-pet-context-turn-001",
+                "context": {"surface": "desktop_pet"},
+                "context_refs": [context_id, document_context_id],
+            },
+        )
+        assert replay.status_code == 200, replay.text
+
     async def pet_context_state():
         async with async_session() as db:
             package = await db.get(DesktopPetContextPackage, context_id)
@@ -1143,12 +1181,23 @@ def test_desktop_pet_capability_least_privilege_bootstrap_and_context_lifecycle(
             capability_row = (await db.execute(select(DesktopPetCapability).where(
                 DesktopPetCapability.token_hash == sha256_text(capability.removeprefix("lfpet_")),
             ))).scalar_one()
-            return package, document_package, capability_row
+            messages = list((await db.execute(select(AgentMessage).where(
+                AgentMessage.session_id == session_id,
+            ))).scalars().all())
+            return package, document_package, capability_row, messages
 
-    package, document_package, capability_row = asyncio.run(pet_context_state())
+    package, document_package, capability_row, messages = asyncio.run(pet_context_state())
     assert capability_row.token_hash != capability.removeprefix("lfpet_")
-    assert package.status == "confirmed"
-    assert package.content == external_reference
+    assert package.status == "consumed"
+    assert package.content is None
+    assert package.consumed_by_turn_id == "desktop-pet-context-turn-001"
     assert package.session_id == session_id
-    assert document_package.status == "confirmed"
-    assert document_package.content is not None
+    assert document_package.status == "consumed"
+    assert document_package.content is None
+    assert document_package.consumed_by_turn_id == "desktop-pet-context-turn-001"
+    serialized_messages = json.dumps(
+        [message.meta_data for message in messages], ensure_ascii=False,
+    )
+    assert external_reference not in serialized_messages
+    assert document_reference not in serialized_messages
+    assert context_id in serialized_messages
