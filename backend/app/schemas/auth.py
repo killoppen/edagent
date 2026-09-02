@@ -94,6 +94,11 @@ class AuthenticatedAccountResponse(BaseModel):
     dev_test_login_enabled: bool
     is_dev_login: bool
     desktop_auth_token: str | None = None
+    desktop_pet_capability_token: str | None = None
+
+
+class DesktopPetCapabilityRefreshResponse(BaseModel):
+    desktop_pet_capability_token: str
 
 
 class LogoutResponse(BaseModel):

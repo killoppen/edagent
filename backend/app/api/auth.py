@@ -20,6 +20,7 @@ from app.schemas.auth import (
     AdminAccountProjection,
     AuthenticatedAccountResponse,
     CsrfTokenResponse,
+    DesktopPetCapabilityRefreshResponse,
     LoginRequest,
     LogoutResponse,
     ModelCredentialMetadata,
@@ -47,6 +48,7 @@ from app.services.auth import (
     get_current_learner,
     hash_password_async,
     is_loopback_request,
+    issue_desktop_pet_capability,
     login_backoff_seconds,
     login_request_keys,
     model_credential_configured,
@@ -67,7 +69,11 @@ router = APIRouter(tags=["Authentication"])
 dev_router = APIRouter(prefix="/dev", tags=["Development"])
 
 
-def _account_view(current: CurrentLearner, desktop_auth_token: str | None = None) -> dict:
+def _account_view(
+    current: CurrentLearner,
+    desktop_auth_token: str | None = None,
+    desktop_pet_capability_token: str | None = None,
+) -> dict:
     result = {
         "id": current.account.id,
         "account_number": current.account.account_number,
@@ -92,6 +98,8 @@ def _account_view(current: CurrentLearner, desktop_auth_token: str | None = None
     }
     if desktop_auth_token:
         result["desktop_auth_token"] = desktop_auth_token
+    if desktop_pet_capability_token:
+        result["desktop_pet_capability_token"] = desktop_pet_capability_token
     return result
 
 
@@ -254,9 +262,18 @@ async def register(
         await db.rollback()
         raise HTTPException(409, "用户名已存在") from None
     set_auth_cookie(response, token)
+    current = CurrentLearner(account, learner, profile)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
-        CurrentLearner(account, learner, profile),
-        token if valid_desktop_request(request) else None,
+        current,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )
 
 
@@ -313,9 +330,18 @@ async def login(
     token = await create_auth_session(db, account)
     await db.commit()
     set_auth_cookie(response, token)
+    current = CurrentLearner(account, learner, profile)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
-        CurrentLearner(account, learner, profile),
-        token if valid_desktop_request(request) else None,
+        current,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )
 
 
@@ -516,9 +542,17 @@ async def change_password(
     token = await create_auth_session(db, current.account)
     await db.commit()
     set_auth_cookie(response, token)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
         current,
-        token if valid_desktop_request(request) else None,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )
 
 
@@ -556,7 +590,50 @@ async def auth_status(
     current = await current_learner_from_request(request, db, required=False)
     if current is None:
         return {"authenticated": False}
-    return {"authenticated": True, **_account_view(current)}
+    desktop_auth_token = None
+    desktop_pet_capability_token = None
+    if valid_desktop_request(request):
+        desktop_auth_token = await create_auth_session(
+            db,
+            current.account,
+            is_dev_login=current.is_dev_login,
+        )
+        desktop_pet_capability_token = await issue_desktop_pet_capability(
+            db, current=current, auth_token=desktop_auth_token,
+        )
+        await db.commit()
+    return {
+        "authenticated": True,
+        **_account_view(current, desktop_auth_token, desktop_pet_capability_token),
+    }
+
+
+@router.post(
+    "/auth/desktop-pet-capability",
+    response_model=DesktopPetCapabilityRefreshResponse,
+)
+async def refresh_desktop_pet_capability(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    current: CurrentLearner = Depends(get_current_learner),
+):
+    """Refresh the pet credential from the parent desktop bearer only."""
+    if (
+        not valid_desktop_request(request)
+        or current.auth_method != "desktop_bearer"
+        or current.session_id is None
+    ):
+        raise HTTPException(403, "只有 LearnFlow 主窗口可以续期桌宠身份")
+    capability = await issue_desktop_pet_capability(
+        db,
+        current=current,
+        auth_session_id=current.session_id,
+    )
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return {"desktop_pet_capability_token": capability}
 
 
 @router.get("/admin/accounts", response_model=list[AdminAccountProjection])
@@ -644,9 +721,18 @@ async def competition_demo_login(
     token = await create_auth_session(db, account, is_dev_login=True)
     await db.commit()
     set_auth_cookie(response, token)
+    current = CurrentLearner(account, learner, profile, is_dev_login=True)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
-        CurrentLearner(account, learner, profile, is_dev_login=True),
-        token if valid_desktop_request(request) else None,
+        current,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )
 
 
@@ -720,7 +806,16 @@ async def dev_login(
     token = await create_auth_session(db, account, is_dev_login=True)
     await db.commit()
     set_auth_cookie(response, token)
+    current = CurrentLearner(account, learner, profile, is_dev_login=True)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
-        CurrentLearner(account, learner, profile, is_dev_login=True),
-        token if valid_desktop_request(request) else None,
+        current,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )

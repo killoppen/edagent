@@ -17,7 +17,15 @@ from sqlalchemy import func, select, update
 from app.core.config import settings
 from app.db.database import async_session
 from app.main import app
-from app.models.learning import AuthLoginAttempt, AuthSession, UserAccount
+from app.models.learning import (
+    AuthLoginAttempt,
+    AuthSession,
+    DesktopPetCapability,
+    DesktopPetContextPackage,
+    ReviewSchedule,
+    UserAccount,
+)
+from app.models.project import Checkpoint, Project, Roadmap
 from app.services.auth import ModelCredentialDecryptionError, decrypt_model_credential
 
 
@@ -965,3 +973,182 @@ def test_dev_account_switching_is_default_closed_and_loopback_only(monkeypatch):
             assert remote.post(
                 f"/api/dev/accounts/{accounts.json()[0]['id']}/login"
             ).status_code == 404
+
+
+def test_desktop_pet_capability_refresh_requires_parent_bearer(monkeypatch):
+    monkeypatch.setattr(settings, "desktop_mode", True)
+    monkeypatch.setattr(settings, "desktop_token", "desktop-pet-refresh-boundary")
+    desktop_header = {"X-LearnFlow-Desktop-Token": settings.desktop_token}
+
+    with TestClient(app) as raw_issuer:
+        issued = browser(raw_issuer).post(
+            "/api/auth/register",
+            headers=desktop_header,
+            json=registration("desktop_pet_refresh_user"),
+        )
+        assert issued.status_code == 200, issued.text
+        bearer = issued.json()["desktop_auth_token"]
+        original_capability = issued.json()["desktop_pet_capability_token"]
+
+    bearer_headers = {"Authorization": f"Bearer {bearer}", **desktop_header}
+    pet_headers = {"Authorization": f"Bearer {original_capability}", **desktop_header}
+    with TestClient(app) as raw_client:
+        client = browser(raw_client)
+        rejected = client.post("/api/auth/desktop-pet-capability", headers=pet_headers)
+        assert rejected.status_code == 403
+
+        refreshed = client.post("/api/auth/desktop-pet-capability", headers=bearer_headers)
+        assert refreshed.status_code == 200, refreshed.text
+        assert refreshed.headers["cache-control"] == "no-store"
+        assert refreshed.headers["pragma"] == "no-cache"
+        replacement_capability = refreshed.json()["desktop_pet_capability_token"]
+        assert replacement_capability.startswith("lfpet_")
+        assert replacement_capability != original_capability
+
+        assert client.get("/api/pet/bootstrap", headers=pet_headers).status_code == 401
+        replacement_headers = {"Authorization": f"Bearer {replacement_capability}", **desktop_header}
+        assert client.get("/api/pet/bootstrap", headers=replacement_headers).status_code == 200
+
+    async def refresh_state():
+        async with async_session() as db:
+            account = (await db.execute(select(UserAccount).where(
+                UserAccount.username_normalized == "desktop_pet_refresh_user",
+            ))).scalar_one()
+            sessions = list((await db.execute(select(AuthSession).where(
+                AuthSession.user_id == account.id,
+            ))).scalars().all())
+            capabilities = list((await db.execute(select(DesktopPetCapability).where(
+                DesktopPetCapability.user_id == account.id,
+                DesktopPetCapability.revoked_at.is_(None),
+            ))).scalars().all())
+            return sessions, capabilities
+
+    sessions, capabilities = asyncio.run(refresh_state())
+    assert len(sessions) == 1
+    assert len(capabilities) == 1
+
+
+def test_desktop_pet_capability_least_privilege_bootstrap_and_context_lifecycle(monkeypatch):
+    monkeypatch.setattr(settings, "desktop_mode", True)
+    monkeypatch.setattr(settings, "desktop_token", "desktop-pet-test-boundary")
+    desktop_header = {"X-LearnFlow-Desktop-Token": settings.desktop_token}
+    external_reference = "外部字幕：神经网络通过多层非线性变换学习表示。"
+    document_reference = "# 外部讲义摘录\n\n反向传播通过链式法则计算参数的梯度。"
+
+    with TestClient(app) as raw_issuer:
+        issuer = browser(raw_issuer)
+        issued = issuer.post(
+            "/api/auth/register",
+            headers=desktop_header,
+            json=registration("desktop_pet_capability_user"),
+        )
+        assert issued.status_code == 200, issued.text
+        bearer = issued.json()["desktop_auth_token"]
+        capability = issued.json()["desktop_pet_capability_token"]
+        learner_id = issued.json()["learner_id"]
+        assert capability.startswith("lfpet_")
+        assert bearer not in capability
+
+    async def seed_review_focus():
+        async with async_session() as db:
+            project = Project(learner_id=learner_id, name="桌宠复习提醒")
+            db.add(project)
+            await db.flush()
+            roadmap = Roadmap(project_id=project.id, raw_json={})
+            db.add(roadmap)
+            await db.flush()
+            checkpoint = Checkpoint(
+                roadmap_id=roadmap.id,
+                title="反向传播",
+                order=1,
+            )
+            db.add(checkpoint)
+            await db.flush()
+            db.add(ReviewSchedule(
+                learner_id=learner_id,
+                project_id=project.id,
+                checkpoint_id=checkpoint.id,
+                item_type="concept",
+                item_id=1,
+                subject_key="神经网络反向传播",
+                phase="active",
+                due_at=datetime.utcnow() - timedelta(minutes=5),
+                lapse_count=2,
+                last_grade="again",
+            ))
+            await db.commit()
+
+    asyncio.run(seed_review_focus())
+
+    bearer_headers = {"Authorization": f"Bearer {bearer}", **desktop_header}
+    pet_headers = {"Authorization": f"Bearer {capability}", **desktop_header}
+    with TestClient(app) as raw_client:
+        client = browser(raw_client)
+        bootstrap = client.get("/api/pet/bootstrap", headers=pet_headers)
+        assert bootstrap.status_code == 200, bootstrap.text
+        assert bootstrap.json()["authority"] == "formal_learnflow_objects"
+        assert bootstrap.json()["review"]["focus_subjects"] == [{
+            "subject": "神经网络反向传播",
+            "reason_code": "review_lapse",
+        }]
+        assert bootstrap.json()["review"]["mastery_unchanged"] is True
+        assert client.get("/api/auth/model-credential", headers=pet_headers).status_code == 403
+        assert client.post("/api/learning-tasks", headers=pet_headers, json={}).status_code == 403
+
+        created_session = client.post("/api/agent/sessions", headers=bearer_headers, json={
+            "session_type": "global",
+            "create_new": True,
+            "title": "桌宠正式会话",
+        })
+        assert created_session.status_code == 200, created_session.text
+        session_id = created_session.json()["id"]
+
+        context = client.post("/api/pet/context-packages", headers=pet_headers, json={
+            "kind": "video_transcript",
+            "content": external_reference,
+            "source_label": "学习者确认的外部视频字幕",
+        })
+        assert context.status_code == 200, context.text
+        context_id = context.json()["id"]
+        assert context.json()["requires_confirmation"] is True
+        confirmed = client.post(
+            f"/api/pet/context-packages/{context_id}/confirm",
+            headers=pet_headers,
+            json={"session_id": session_id},
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        assert confirmed.json()["status"] == "confirmed"
+
+        document_context = client.post(
+            "/api/pet/context-packages/document",
+            headers=pet_headers,
+            files={"file": ("反向传播讲义.md", document_reference.encode("utf-8"), "text/markdown")},
+        )
+        assert document_context.status_code == 200, document_context.text
+        document_context_id = document_context.json()["id"]
+        assert document_context.json()["kind"] == "document_excerpt"
+        assert "反向传播讲义.md" in document_context.json()["source_label"]
+        document_confirmed = client.post(
+            f"/api/pet/context-packages/{document_context_id}/confirm",
+            headers=pet_headers,
+            json={"session_id": session_id},
+        )
+        assert document_confirmed.status_code == 200, document_confirmed.text
+        assert document_confirmed.json()["status"] == "confirmed"
+
+    async def pet_context_state():
+        async with async_session() as db:
+            package = await db.get(DesktopPetContextPackage, context_id)
+            document_package = await db.get(DesktopPetContextPackage, document_context_id)
+            capability_row = (await db.execute(select(DesktopPetCapability).where(
+                DesktopPetCapability.token_hash == sha256_text(capability.removeprefix("lfpet_")),
+            ))).scalar_one()
+            return package, document_package, capability_row
+
+    package, document_package, capability_row = asyncio.run(pet_context_state())
+    assert capability_row.token_hash != capability.removeprefix("lfpet_")
+    assert package.status == "confirmed"
+    assert package.content == external_reference
+    assert package.session_id == session_id
+    assert document_package.status == "confirmed"
+    assert document_package.content is not None

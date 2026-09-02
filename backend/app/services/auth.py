@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import ipaddress
 import math
+import re
 import secrets
 import threading
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.database import async_session, get_db
 from app.models.learning import (
-    AuthLoginAttempt, AuthSession, Learner, LearnerProfile, UserAccount,
+    AuthLoginAttempt, AuthSession, DesktopPetCapability, Learner, LearnerProfile, UserAccount,
 )
 from app.models.project import (
     ArtifactAnnotation, Checkpoint, Exercise, LectureNote, ProcessAnimation, Project, Roadmap,
@@ -42,6 +43,22 @@ class CurrentLearner:
     is_dev_login: bool = False
     session_id: int | None = None
     auth_method: str = "internal"
+    pet_capability_scopes: tuple[str, ...] = ()
+    pet_capability_expires_at: datetime | None = None
+
+
+DESKTOP_PET_CAPABILITY_SCOPES = (
+    "pet.bootstrap.read",
+    "pet.session.read",
+    "pet.tutor.turn",
+    "pet.task.read",
+    "pet.task.control",
+    "pet.skill.control",
+    "pet.review.read",
+    "pet.file.read",
+    "pet.context.write",
+)
+DESKTOP_PET_CAPABILITY_TTL_SECONDS = 10 * 60
 
 
 @dataclass(frozen=True)
@@ -361,6 +378,68 @@ async def create_auth_session(
     return token
 
 
+async def issue_desktop_pet_capability(
+    db: AsyncSession,
+    *,
+    current: CurrentLearner,
+    auth_token: str | None = None,
+    auth_session_id: int | None = None,
+) -> str:
+    """Issue a capability that the pet can use without receiving a full bearer.
+
+    The capability is opaque and database-backed so logout, account epoch
+    changes and expiry are all checked server-side.  It is intentionally scoped
+    to a small set of read/continue operations rather than general API access.
+    """
+    if (auth_token is None) == (auth_session_id is None):
+        raise ValueError("必须提供且仅提供一个桌面认证会话标识")
+    now = datetime.utcnow()
+    session_filter = (
+        AuthSession.token_hash == _token_hash(auth_token)
+        if auth_token is not None
+        else AuthSession.id == auth_session_id
+    )
+    auth_session = (await db.execute(select(AuthSession).where(
+        session_filter,
+        AuthSession.user_id == current.account.id,
+        AuthSession.revoked_at.is_(None),
+        AuthSession.auth_epoch == current.account.auth_epoch,
+        AuthSession.expires_at > now,
+        AuthSession.absolute_expires_at > now,
+        AuthSession.idle_expires_at > now,
+    ))).scalar_one_or_none()
+    if not auth_session:
+        raise RuntimeError("桌面认证会话已失效")
+    await db.execute(
+        delete(DesktopPetCapability).where(
+            DesktopPetCapability.auth_session_id == auth_session.id,
+            DesktopPetCapability.revoked_at.is_(None),
+        )
+    )
+    capability = secrets.token_urlsafe(32)
+    db.add(DesktopPetCapability(
+        auth_session_id=auth_session.id,
+        user_id=current.account.id,
+        learner_id=current.learner.id,
+        token_hash=_token_hash(capability),
+        scopes=list(DESKTOP_PET_CAPABILITY_SCOPES),
+        auth_epoch=int(current.account.auth_epoch or 0),
+        expires_at=now + timedelta(seconds=DESKTOP_PET_CAPABILITY_TTL_SECONDS),
+    ))
+    await db.flush()
+    return f"lfpet_{capability}"
+
+
+def require_desktop_pet_capability(
+    current: CurrentLearner,
+    scope: str,
+) -> None:
+    if current.auth_method != "desktop_pet_capability":
+        raise HTTPException(403, "该接口仅允许桌宠受限身份访问")
+    if scope not in current.pet_capability_scopes:
+        raise HTTPException(403, "桌宠身份没有此操作权限")
+
+
 def set_auth_cookie(response: Response, token: str):
     response.set_cookie(
         key=settings.auth_cookie_name,
@@ -399,7 +478,68 @@ def _desktop_bearer_token(request: Request) -> str | None:
     authorization = request.headers.get("authorization", "")
     if authorization.lower().startswith("bearer ") and valid_desktop_request(request):
         token = authorization[7:].strip()
-        return token or None
+        if token and not token.startswith("lfpet_"):
+            return token
+    return None
+
+
+def _desktop_pet_capability_token(request: Request) -> str | None:
+    authorization = request.headers.get("authorization", "")
+    if not authorization.lower().startswith("bearer ") or not valid_desktop_request(request):
+        return None
+    token = authorization[7:].strip()
+    if token.startswith("lfpet_"):
+        return token.removeprefix("lfpet_") or None
+    return None
+
+
+def _required_desktop_pet_scope(request: Request) -> str | None:
+    """Map the tiny desktop-pet API surface to a capability scope.
+
+    Authorization is checked before a route reaches a normal CurrentLearner
+    dependency, preventing a captured pet capability from being reused for a
+    profile, credential, project mutation or evidence endpoint.
+    """
+    path = request.url.path
+    method = request.method.upper()
+    if method == "GET" and path == "/api/pet/bootstrap":
+        return "pet.bootstrap.read"
+    if method == "GET" and (
+        path == "/api/agent/sessions"
+        or re.fullmatch(r"/api/agent/sessions/\d+", path)
+    ):
+        return "pet.session.read"
+    if method == "POST" and re.fullmatch(r"/api/agent/sessions/\d+/turns", path):
+        return "pet.tutor.turn"
+    if method == "POST" and re.fullmatch(r"/api/agent/sessions/\d+/skill-runs/\d+/actions", path):
+        return "pet.skill.control"
+    if method == "GET" and (
+        path in {"/api/learning-tasks", "/api/learning-tasks/summary"}
+        or re.fullmatch(r"/api/learning-tasks/\d+", path)
+    ):
+        return "pet.task.read"
+    if method == "POST" and re.fullmatch(r"/api/learning-tasks/\d+/actions", path):
+        return "pet.task.control"
+    if method == "GET" and path in {
+        "/api/review/summary", "/api/review/items", "/api/review/agent-context",
+    }:
+        return "pet.review.read"
+    if method == "GET" and (
+        path == "/api/learning-files"
+        or re.fullmatch(r"/api/learning-files/(lecture|practice)/[^/]+", path)
+    ):
+        return "pet.file.read"
+    if path in {
+        "/api/pet/context-packages",
+        "/api/pet/context-packages/document",
+        "/api/pet/context-packages/image",
+        "/api/pet/selection-text",
+    } and method == "POST":
+        return "pet.context.write"
+    if re.fullmatch(r"/api/pet/context-packages/[^/]+", path) and method == "DELETE":
+        return "pet.context.write"
+    if re.fullmatch(r"/api/pet/context-packages/[^/]+/confirm", path) and method == "POST":
+        return "pet.context.write"
     return None
 
 
@@ -536,7 +676,7 @@ async def enforce_browser_request_security(request: Request) -> None:
     if request.url.path == _RUNTIME_BRIDGE_PATH:
         require_runtime_bridge_request(request)
         return
-    if _desktop_bearer_token(request):
+    if _desktop_bearer_token(request) or _desktop_pet_capability_token(request):
         return
     if _is_unannotated_in_process_test_request(request):
         return
@@ -576,6 +716,49 @@ async def current_learner_from_request(
     *,
     required: bool = True,
 ) -> CurrentLearner | None:
+    pet_capability = _desktop_pet_capability_token(request)
+    if pet_capability:
+        required_scope = _required_desktop_pet_scope(request)
+        if not required_scope:
+            raise HTTPException(403, "桌宠身份不能访问此接口")
+        now = datetime.utcnow()
+        row = (await db.execute(
+            select(DesktopPetCapability, AuthSession, UserAccount, Learner, LearnerProfile)
+            .join(AuthSession, AuthSession.id == DesktopPetCapability.auth_session_id)
+            .join(UserAccount, UserAccount.id == DesktopPetCapability.user_id)
+            .join(Learner, Learner.id == DesktopPetCapability.learner_id)
+            .join(LearnerProfile, LearnerProfile.learner_id == Learner.id)
+            .where(
+                DesktopPetCapability.token_hash == _token_hash(pet_capability),
+                DesktopPetCapability.revoked_at.is_(None),
+                DesktopPetCapability.expires_at > now,
+                DesktopPetCapability.auth_epoch == UserAccount.auth_epoch,
+                AuthSession.revoked_at.is_(None),
+                AuthSession.expires_at > now,
+                AuthSession.absolute_expires_at > now,
+                AuthSession.idle_expires_at > now,
+                AuthSession.auth_epoch == UserAccount.auth_epoch,
+                UserAccount.status == "active",
+            )
+        )).first()
+        if not row:
+            if required:
+                raise HTTPException(401, "桌宠身份已失效，请在主窗口重新登录")
+            return None
+        capability, session, account, learner, profile = row
+        scopes = tuple(str(item) for item in (capability.scopes or ()) if isinstance(item, str))
+        if required_scope not in scopes:
+            raise HTTPException(403, "桌宠身份没有此操作权限")
+        return CurrentLearner(
+            account=account,
+            learner=learner,
+            profile=profile,
+            is_dev_login=bool(session.is_dev_login),
+            session_id=session.id,
+            auth_method="desktop_pet_capability",
+            pet_capability_scopes=scopes,
+            pet_capability_expires_at=capability.expires_at,
+        )
     bearer_token = _desktop_bearer_token(request)
     raw_token = bearer_token or request.cookies.get(settings.auth_cookie_name)
     auth_method = "desktop_bearer" if bearer_token else "cookie"
