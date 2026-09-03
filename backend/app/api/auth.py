@@ -547,7 +547,7 @@ async def test_vision_credential(
                     {"type": "text", "text": "只回复 OK"},
                     {"type": "image_url", "image_url": {"url": (
                         "data:image/png;base64,"
-                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNk+M/wHwAF/gL+K5wqAAAAAElFTkSuQmCC"
+                        "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAI0lEQVR4nGP8//8/AymAiSTVDKMaiANMRKqDg1ENxACSQwkAVW0DHeN02ZEAAAAASUVORK5CYII="
                     )}},
                 ],
             }],

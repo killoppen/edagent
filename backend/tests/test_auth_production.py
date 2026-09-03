@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import struct
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -745,6 +746,9 @@ def test_account_vision_credential_isolated_from_tutor_and_supports_reuse(monkey
         assert captured["api_key"] == vision_secret
         assert captured["base_url"] == "https://vision.example/v1"
         assert captured["request"]["messages"][0]["content"][1]["type"] == "image_url"
+        image_url = captured["request"]["messages"][0]["content"][1]["image_url"]["url"]
+        image_data = base64.b64decode(image_url.split(",", 1)[1])
+        assert struct.unpack(">II", image_data[16:24]) == (16, 16)
 
         reused = client.put(
             "/api/auth/vision-credential",
