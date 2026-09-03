@@ -693,7 +693,12 @@ async def enforce_browser_request_security(request: Request) -> None:
     if request.url.path == _RUNTIME_BRIDGE_PATH:
         require_runtime_bridge_request(request)
         return
-    if _desktop_bearer_token(request) or _desktop_pet_capability_token(request):
+    if valid_desktop_request(request):
+        # Desktop shell (Tauri sidecar) traffic is cross-origin by design and
+        # is authenticated by the per-boot X-LearnFlow-Desktop-Token that the
+        # sidecar hands only to its own window.  Pre-auth bootstrap calls such
+        # as /api/auth/login carry that token but no bearer yet, so exempt the
+        # whole desktop channel here; every route still enforces its own auth.
         return
     if _is_unannotated_in_process_test_request(request):
         return

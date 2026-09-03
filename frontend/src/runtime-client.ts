@@ -20,6 +20,7 @@ let csrfToken = ''
 let csrfInitialization: Promise<CsrfBootstrapResult> | undefined
 let runtimeAuthGeneration = 0
 let runtimeAuthActive = false
+let desktopWindowLabel = ''
 
 type CsrfBootstrapResult = {
   token?: string
@@ -43,6 +44,10 @@ export function getRuntimeClientState() {
 
 export function isDesktopRuntime() {
   return runtime.kind === 'desktop'
+}
+
+export function isDesktopPetWindow() {
+  return runtime.kind === 'desktop' && desktopWindowLabel === 'pet'
 }
 
 export function learnerWorkspaceStorageKey(learnerId: number) {
@@ -76,11 +81,45 @@ export function resolveRuntimeUrl(input: RequestInfo | URL) {
   return `${runtime.apiBaseUrl.replace(/\/$/, '')}${input.slice('/api'.length)}`
 }
 
+export async function refreshDesktopPetAuthToken(): Promise<void> {
+  if (!isDesktopPetWindow()) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const token = await invoke<string>('desktop_pet_auth_token')
+    if (typeof token === 'string' && token) {
+      try { sessionStorage.setItem(DESKTOP_AUTH_STORAGE_KEY, token) } catch { /* no persistent fallback */ }
+    }
+  } catch { /* the pet window may close while a refresh is in flight */ }
+}
+
 export function captureRuntimeAuth(payload: unknown) {
   if (runtime.kind !== 'desktop' || !payload || typeof payload !== 'object') return
   const token = (payload as Record<string, unknown>).desktop_auth_token
-  if (typeof token !== 'string' || !token) return
-  try { sessionStorage.setItem(DESKTOP_AUTH_STORAGE_KEY, token) } catch { /* no persistent fallback */ }
+  if (typeof token === 'string' && token) {
+    try { sessionStorage.setItem(DESKTOP_AUTH_STORAGE_KEY, token) } catch { /* no persistent fallback */ }
+  }
+  const petCapability = (payload as Record<string, unknown>).desktop_pet_capability_token
+  if (typeof petCapability === 'string' && petCapability) {
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('store_desktop_pet_capability', { token: petCapability }))
+      .catch(() => undefined)
+  }
+}
+
+export async function syncDesktopPetSession(sessionId?: number) {
+  if (!isDesktopRuntime() || desktopWindowLabel !== 'main') return
+  if (sessionId !== undefined && (!Number.isSafeInteger(sessionId) || sessionId <= 0)) {
+    throw new Error('正式 Tutor 会话标识无效')
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('sync_desktop_pet_session', { sessionId: sessionId ?? null })
+}
+
+export async function readDesktopPetSession() {
+  if (!isDesktopPetWindow()) return undefined
+  const { invoke } = await import('@tauri-apps/api/core')
+  const sessionId = await invoke<number | null>('desktop_pet_active_session')
+  return Number.isSafeInteger(sessionId) && Number(sessionId) > 0 ? Number(sessionId) : undefined
 }
 
 export function resetRuntimeCsrfToken() {
@@ -99,6 +138,11 @@ export function clearRuntimeAuth() {
   resetRuntimeCsrfToken()
   runtimeAuthActive = false
   try { sessionStorage.removeItem(DESKTOP_AUTH_STORAGE_KEY) } catch { /* sessionStorage may be unavailable */ }
+  if (runtime.kind === 'desktop' && desktopWindowLabel === 'main') {
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('clear_desktop_auth_token'))
+      .catch(() => undefined)
+  }
 }
 
 function notifyUnauthorized() {
@@ -192,6 +236,7 @@ export async function runtimeFetch(input: RequestInfo | URL, init: RequestInit =
   const headers = new Headers(init.headers)
   if (runtime.kind === 'desktop' && runtime.desktopToken) {
     headers.set('X-LearnFlow-Desktop-Token', runtime.desktopToken)
+    await refreshDesktopPetAuthToken()
     let authToken: string | null = null
     try { authToken = sessionStorage.getItem(DESKTOP_AUTH_STORAGE_KEY) } catch { /* no bearer available */ }
     if (authToken) headers.set('Authorization', `Bearer ${authToken}`)
@@ -240,12 +285,20 @@ export function initializeRuntimeClient(): Promise<RuntimeClientState> {
     if (!isTauriWindow()) return runtime
     runtime = { kind: 'desktop', ready: false }
     try {
-      const { invoke } = await import('@tauri-apps/api/core')
+      const [{ invoke }, { getCurrentWebviewWindow }] = await Promise.all([
+        import('@tauri-apps/api/core'),
+        import('@tauri-apps/api/webviewWindow'),
+      ])
       const config = await invoke<{ apiBaseUrl: string; desktopToken: string }>('desktop_runtime_config')
       await waitForSidecar(config.apiBaseUrl)
+      desktopWindowLabel = getCurrentWebviewWindow().label
       runtime = {
         kind: 'desktop', ready: true,
         apiBaseUrl: config.apiBaseUrl, desktopToken: config.desktopToken,
+      }
+      if (desktopWindowLabel === 'pet') {
+        await refreshDesktopPetAuthToken()
+        runtimeAuthActive = true
       }
       document.documentElement.dataset.learnflowDesktop = 'true'
     } catch (error) {

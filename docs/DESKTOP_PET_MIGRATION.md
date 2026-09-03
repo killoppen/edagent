@@ -310,3 +310,55 @@ Tauri：capabilities(default.json) + lib.rs(窗口/托盘/命令) + Cargo/tauri.
 - all 端接入点勘察（本会话 Explore 报告）：后端 main/auth/db/config/agent/tutor_service/registry 现状、前端 main/runtime-client/formal-runtime/tutor 现状、Tauri 单窗壳差距、近期 role/hub/graph 改动热点文件。
 
 > 执行迁移时，若某文件在 all 已有新改动与本节描述不符，以 all 实际代码为准并回填本表。
+
+---
+
+## 11. 波次一实施记录（2026-09-02）
+
+分支 `feat/desktop-pet-migration`；源定格 LF `d8607a5` 已提交主链路 + snapshot `98cbc4d` 的选区抓取片段（D5 提前）。
+
+### 11.1 已交付清单
+
+**后端（已提交，68c90ed → a09864d）**
+- 数据层 `models/learning.py`（pet 两表 + 序列）、`db/database.py`（建表/列/唯一索引/迁移登记）、`core/config.py`、`.env.example`（VISION_* 沿用 all 已有键）。
+- 认证与 API：`services/auth.py`（capability 签发/校验/URL→scope 白名单）、`api/auth.py`（capability token 附加 + `POST /auth/desktop-pet-capability`）、`api/pet.py`（/pet/bootstrap、context-packages、/pet/selection-text）、`services/desktop_pet_context.py`、`services/desktop_pet_vision.py`（走 all 后端 VISION_*，D3）、`api/main.py` 挂载。
+- 受限回合：`schemas/agent.py`（context_refs）、`api/agent.py`、`services/tutor_service.py`（restricted 分支 + consume；常规 turn 不改）。
+- 架构登记：`architecture_registry.py`/`action_board.py` + 同步 `tests/test_architecture_registry.py`。
+
+**前端（未提交）**
+- `runtime-client.ts`、`formal-runtime.ts`、`main.tsx`（openDesktopPet/事件桥/mount 分流/顶栏按钮/`tabFromPath` 映射/session 同步/capability 周期刷新）。
+- 新增 `DesktopPet.tsx`（= LF committed 882 行 + snapshot 选区抓取/OCR 转录链，剔除 dock/紧凑动画与 source_ref 字幕）、`DesktopPet.module.css`（committed 92 行 + selection 样式 6 行）、`PetAvatar.tsx` + `.module.css`。
+- `package.json`：新增 `@tauri-apps/plugin-notification ^2.3.3`（复习提醒；Rust 侧同步注册）。
+
+**Tauri / 桌面（未提交，Phase 7 agent 完成，cargo check 绿）**
+- `src/lib.rs`（101 → ~815 行）：扩展 `DesktopRuntimeState`；保留原 sidecar env/`desktop_runtime_config` 契约与 ExitRequested 清理；注册 dialog+notification+shell；14 个命令齐全；pet 窗 `CloseRequested` → `prevent_close` + hide（发 `learnflow:desktop-pet-hidden`）；Ctrl+Alt+P 全局快捷键按持久化 `shortcut` 生效：pet 可见→选区抓取请求，否则→开 pet 请求。
+- `capabilities/default.json`：windows 加 `"pet"`；补 `core:window:allow-*`/`core:webview:allow-create-webview-window`/`notification:default`；identifier 仍 `desktop-main`；不放 `http:` 权限（all 用 fetch）。
+- `Cargo.toml`：`serde_json`、`tauri-plugin-notification 2.3.3`、windows-sys `0.61`（Win32 选区抓取相关）。
+- `backend/requirements.txt`：显式 pin `openai==1.109.1`、`Pillow==12.3.0`（C7；见 11.3 偏差④）。
+
+### 11.2 验证结果
+
+| 层 | 结果 |
+| --- | --- |
+| 后端 | 全量 pytest：**382 passed**，9 failed 均为**中文 Windows 环境/与本迁移无关**（见 11.3 偏差⑥）。迁移关键子集全绿：architecture registry + pet vision 25、auth production + tutor 83。 |
+| 前端 | `tsc -b` 0 错误；`npx vite build` 成功（含 DesktopPet 分包；仅既有 chunk>500kB 提示）。 |
+| 桌面 | `cargo check` 0 错误 0 警告（需 `desktop/src-tauri/binaries/learnflow-backend-*.exe` 存在，当前为 gitignored 占位；打包前须跑 `build_sidecar.py`）。 |
+| 手工 e2e | 本会话未执行（需先产真实 sidecar + GUI 运行）。详见 §11.4。 |
+
+### 11.3 偏差与说明
+
+1. **选区抓取提前（D5 已拍板）**：`capture_desktop_pet_selection` 及其前台窗口捕获链从 snapshot 移植进波次一；字幕 `source_ref`/`desktop-pet-subtitles.ts` 仍留波次二，未拷贝。
+2. **波次二 Rust 后置**：托盘、edgeAutoHide 的 OS 贴边 dock、compact-dock/动画/`restore_desktop_pet_dock`/`set_desktop_pet_view`、单实例守卫**未移植**。`edgeAutoHide`/`mouseThrough` 偏好可持久化；`mouseThrough` 用 `set_ignore_cursor_events` 即时生效（无托盘恢复入口，属波次二补齐范围）。
+3. **B16 `tutor.ts` 未改**（文档标注"如需"）：pet 回合走后端 restricted 分支 + `context_refs`，主窗纯文本 payload 未触碰。
+4. **C7 版本偏差**：文档建议 `Pillow==11.3.0`（LF pin）；all 环境实测已解析 `Pillow==12.3.0` 且全量回归绿，故按实测版本显式 pin（`openai==1.109.1`、`Pillow==12.3.0`），避免无谓降级。
+5. **C2 `tauri.conf.json` 未改**：现有 CSP/单窗口配置已覆盖 pet（同源共享 index.html；pet 窗由前端 `WebviewWindow('pet',…)` 运行时创建）。
+6. **9 项既有后端失败与迁移无关**：涉及 `code_executor`(进程组 kill)、`local_agent_broker`/`source_boundaries`/`workspace`/`user_isolation`（symlink 特权 WinError 1314、非法文件名 `?` WinError 123、settings GBK 解码）等文件均与 `main` **字节一致**，属本机环境（无 Developer Mode symlink 特权 + 中文 locale），CI 上应复核。
+7. **前端已装但未提交**：`DesktopPet/PetAvatar` 四个文件与三个共享文件改动尚未 commit；`Cargo.lock` 已随 cargo 更新。
+
+### 11.4 波次一遗留手工验证（需真实 sidecar + GUI）
+
+登录 → 主窗进入正式 Session → 开 pet → scope 跟随 → 提问/带图/`Ctrl+Alt+P` 选区抓取 → 回答后主窗定位 → 关窗仅隐藏、再开恢复。执行前置：`desktop/scripts/build_sidecar.py` 产出真实 sidecar，再 `cargo build`/`npm run build`。
+
+### 11.5 波次二待办（未动）
+
+`desktop-pet-subtitles.ts` + 时间轴 source_ref UI/服务端、字幕 test（C6 脚本挂载）、`test_desktop_pet_source_ref.py`、dock/紧凑动画与 OS 贴边、托盘（含 mouseThrough 恢复入口）、单实例唤醒。

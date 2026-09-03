@@ -805,6 +805,40 @@ def test_cookie_csrf_origin_revocation_and_desktop_bearer_exemption(monkeypatch)
         assert response.status_code == 200, response.text
 
 
+def test_desktop_webview_cross_site_login_exempt_from_browser_security(monkeypatch):
+    # The Tauri window origin (dev http://localhost:4174, prod tauri://localhost)
+    # is inherently cross-site to the sidecar API on 127.0.0.1:<port>.  A valid
+    # X-LearnFlow-Desktop-Token must let pre-auth calls (login/register, no
+    # bearer yet) reach the CSRF bootstrap routes instead of being rejected by
+    # _validate_browser_source with a 403 and no ACAO header.
+    monkeypatch.setattr(settings, "desktop_mode", True)
+    monkeypatch.setattr(settings, "desktop_token", "desktop-webview-boundary")
+    webview_headers = {
+        "Origin": "http://localhost:4174",
+        "Sec-Fetch-Site": "cross-site",
+        "X-LearnFlow-Desktop-Token": settings.desktop_token,
+    }
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/auth/register",
+            headers=webview_headers,
+            json=registration("desktop_webview_user"),
+        )
+        assert created.status_code == 200, created.text
+        login = client.post("/api/auth/login", headers=webview_headers, json={
+            "username": "desktop_webview_user",
+            "password": "LearnFlow-安全密码-2026!",
+        })
+        assert login.status_code == 200, login.text
+        assert login.json().get("desktop_auth_token")
+        # The same cross-site web origin WITHOUT the desktop token stays blocked.
+        blocked = client.post("/api/auth/logout", headers={
+            "Origin": "http://localhost:4174",
+            "Sec-Fetch-Site": "cross-site",
+        })
+        assert blocked.status_code == 403, blocked.text
+
+
 def test_unannotated_in_process_testclient_remains_compatible():
     # Existing integration tests intentionally use Starlette's synthetic
     # testclient@testserver transport and predate browser security headers.
