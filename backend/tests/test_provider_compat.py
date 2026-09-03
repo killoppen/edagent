@@ -79,3 +79,33 @@ def test_create_chat_completion_uses_raw_response_for_spark():
 
     assert result.model == "spark-x"
     assert calls[0]["max_tokens"] == 16
+
+
+def test_create_chat_completion_reads_legacy_raw_response_text():
+    class FakeRawResponse:
+        text = '{"code":0,"sid":"legacy-session","choices":[{"message":{"role":"assistant","content":"OK"}}]}'
+
+    class FakeCompletions:
+        def __init__(self):
+            self.with_raw_response = SimpleNamespace(create=self.create_raw)
+
+        async def create_raw(self, **kwargs):
+            return FakeRawResponse()
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+        async def close(self):
+            return None
+
+    result = asyncio.run(create_chat_completion(
+        api_key="api-password",
+        base_url="https://spark-api-open.xf-yun.com/agent/v1",
+        model="spark-x",
+        messages=[{"role": "user", "content": "只回复 OK"}],
+        client_class=FakeClient,
+    ))
+
+    assert result.id == "legacy-session"
+    assert result.choices[0].message.content == "OK"

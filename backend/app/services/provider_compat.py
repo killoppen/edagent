@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import time
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit
@@ -16,6 +17,32 @@ class ProviderResponseError(Exception):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
+
+
+def _raw_response_payload(raw_response: Any) -> Mapping[str, Any]:
+    """Read JSON from both current and legacy OpenAI raw response wrappers."""
+    json_method = getattr(raw_response, "json", None)
+    if callable(json_method):
+        payload = json_method()
+    else:
+        raw_text = getattr(raw_response, "text", None)
+        if callable(raw_text):
+            raw_text = raw_text()
+        if isinstance(raw_text, bytes):
+            raw_text = raw_text.decode("utf-8", "replace")
+        if not isinstance(raw_text, str):
+            content = getattr(raw_response, "content", b"")
+            if isinstance(content, bytes):
+                raw_text = content.decode("utf-8", "replace")
+            else:
+                raw_text = str(content or "")
+        try:
+            payload = json.loads(raw_text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise ProviderResponseError("模型响应不是有效 JSON") from None
+    if not isinstance(payload, Mapping):
+        raise ProviderResponseError("模型响应格式无效")
+    return payload
 
 
 def is_spark_provider(base_url: str) -> bool:
@@ -67,9 +94,7 @@ async def create_chat_completion(
                 messages=messages,
                 **kwargs,
             )
-            payload = raw_response.json()
-            if not isinstance(payload, Mapping):
-                raise ProviderResponseError("模型响应格式无效")
+            payload = _raw_response_payload(raw_response)
             return normalize_spark_chat_response(payload, model)
         return await client.chat.completions.create(
             model=model,
