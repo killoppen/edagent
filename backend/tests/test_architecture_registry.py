@@ -44,7 +44,7 @@ def test_registry_has_three_agents_five_kernels_and_no_drift():
     assert set(ACTION_BOARD) == set(CAPABILITY_OWNERS)
     assert validate_registry() == []
     manifest = registry_manifest()
-    assert REGISTRY_VERSION == "2026-09-02.6"
+    assert REGISTRY_VERSION == "2026-09-03.1"
     assert manifest["schema_valid"] is True
     assert manifest["valid"] is (
         manifest["schema_valid"] and manifest["implementation_valid"]
@@ -678,16 +678,13 @@ def test_desktop_pet_is_registered_without_kernel_or_evidence_writes():
     assert "EvidenceEvent" in TOOLS["desktop_pet_gateway"].write_path
     assert "KernelState" in TOOLS["desktop_pet_gateway"].write_path
     assert "never enter AgentMessage" in TOOLS["desktop_pet_vision_observer"].write_path
-    # Backend capability surface is already published (routes exist); the pet
-    # window frontend component is staged behind Phase 6, so the workbench is
-    # optional_unimplemented while its capabilities stay available.
     manifest = registry_manifest()
     workbench_rows = {row["id"]: row for row in manifest["workbenches"]}
     capability_rows = {row["capability"]: row for row in manifest["capabilities"]}
-    assert workbench_rows["desktop_pet"]["lifecycle"] == "optional_unimplemented"
-    assert workbench_rows["desktop_pet"]["binding_ids"] == []
-    assert workbench_rows["desktop_pet"]["available"] is False
-    assert workbench_rows["desktop_pet"]["lifecycle_note"]
+    assert workbench_rows["desktop_pet"]["lifecycle"] == "implemented"
+    assert workbench_rows["desktop_pet"]["binding_ids"] == ["workbench:desktop_pet"]
+    assert workbench_rows["desktop_pet"]["available"] is True
+    assert workbench_rows["desktop_pet"]["lifecycle_note"] == ""
     for capability in pet_capabilities:
         assert capability_rows[capability]["lifecycle"] == "implemented"
         assert capability_rows[capability]["binding_ids"] == [

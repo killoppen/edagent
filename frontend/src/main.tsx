@@ -1145,9 +1145,13 @@ function App({ auth }: { auth: AuthGateSession }) {
         const unlistenPetRequest = await listen('learnflow:desktop-pet-requested', () => {
           void openDesktopPet(activeConversation?.formalSessionId).catch(() => undefined)
         })
+        const unlistenInstanceActivated = await listen('learnflow:desktop-instance-activated', () => {
+          setSidebarOpen(false)
+        })
         return () => {
           unlistenNavigation()
           unlistenPetRequest()
+          unlistenInstanceActivated()
         }
       })
       .then(listener => { unlisten = listener })

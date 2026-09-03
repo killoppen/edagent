@@ -17,7 +17,7 @@ from typing import Any
 from app.services.action_board import ACTION_BOARD
 
 
-REGISTRY_VERSION = "2026-09-02.6"
+REGISTRY_VERSION = "2026-09-03.1"
 EVENT_SCHEMA_VERSION = "learnflow.evidence.v1"
 SKILL_SPEC_VERSION = "learnflow.skill.v3"
 # The learner-facing SkillSpec changed in this registry release.
@@ -1651,6 +1651,7 @@ _FRONTEND_COMPONENT_TARGETS = {
     "workbench:review": ("frontend/src/ReviewWorkbenchPage.tsx", "ReviewWorkbenchPage", "/review"),
     "workbench:competition_demo": ("frontend/src/ReviewWorkbenchPage.tsx", "ReviewWorkbenchPage", "/review"),
     "workbench:desktop_workspace": ("frontend/src/main.tsx", "App", ""),
+    "workbench:desktop_pet": ("frontend/src/DesktopPet.tsx", "DesktopPet", ""),
 }
 
 
@@ -1862,7 +1863,6 @@ _WORKBENCH_LIFECYCLES = {
     "profile": ("deprecated", "Legacy /profile redirect is not a canonical frontend workbench."),
     "memory": ("deprecated", "Legacy /memory redirect is not a canonical frontend workbench."),
     "xingchen_studio": ("optional_unimplemented", "No Xingchen Studio runtime or repository-owned route exists."),
-    "desktop_pet": ("optional_unimplemented", "The DesktopPet tauri://pet window surface is not yet bound to a frontend component in this registry release."),
 }
 
 

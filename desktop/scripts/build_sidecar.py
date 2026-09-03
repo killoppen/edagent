@@ -57,7 +57,8 @@ def main() -> None:
     target = rust_host_triple()
     python = build_python()
     executable = "learnflow-backend.exe" if platform.system() == "Windows" else "learnflow-backend"
-    subprocess.run([
+    data_separator = ";" if platform.system() == "Windows" else ":"
+    pyinstaller_args = [
         python,
         "-m",
         "PyInstaller",
@@ -81,8 +82,16 @@ def main() -> None:
         # source processor; keep them in the desktop sidecar bundle.
         "--hidden-import=pypdf",
         "--hidden-import=docx",
-        str(BACKEND_ROOT / "desktop_entry.py"),
-    ], check=True, cwd=REPO_ROOT)
+        "--hidden-import=backports.tarfile",
+    ]
+    plugin_dist = REPO_ROOT / "plugins" / "dist"
+    if plugin_dist.is_dir():
+        pyinstaller_args.extend([
+            "--add-data",
+            f"{plugin_dist}{data_separator}plugins/dist",
+        ])
+    pyinstaller_args.append(str(BACKEND_ROOT / "desktop_entry.py"))
+    subprocess.run(pyinstaller_args, check=True, cwd=REPO_ROOT)
     BINARIES_ROOT.mkdir(parents=True, exist_ok=True)
     suffix = ".exe" if platform.system() == "Windows" else ""
     destination = BINARIES_ROOT / f"learnflow-backend-{target}{suffix}"

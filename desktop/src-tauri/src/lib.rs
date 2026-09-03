@@ -5,8 +5,18 @@ use std::process::Command;
 use std::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::thread;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewWindow, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, HANDLE, ERROR_ALREADY_EXISTS, WAIT_OBJECT_0,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, SetEvent, WaitForMultipleObjects, INFINITE,
+};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 #[cfg(target_os = "windows")]
@@ -16,7 +26,12 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{PeekMessageW, MSG, PM_REMOVE, WM_HOTKEY};
 
+const PET_TRAY_TOGGLE_ID: &str = "desktop-pet-toggle";
+const PET_TRAY_OPEN_MAIN_ID: &str = "desktop-pet-open-main";
+const PET_TRAY_DISABLE_MOUSE_THROUGH_ID: &str = "desktop-pet-disable-mouse-through";
+const PET_TRAY_QUIT_ID: &str = "desktop-pet-quit";
 const PET_REQUEST_EVENT: &str = "learnflow:desktop-pet-requested";
+const INSTANCE_ACTIVATED_EVENT: &str = "learnflow:desktop-instance-activated";
 const PET_HIDDEN_EVENT: &str = "learnflow:desktop-pet-hidden";
 const PET_GLOBAL_SHORTCUT_LABEL: &str = "Ctrl+Alt+P";
 const PET_OCR_MAX_BYTES: u64 = 12 * 1024 * 1024;
@@ -535,6 +550,119 @@ fn request_desktop_pet(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+fn disable_desktop_pet_mouse_through(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<DesktopRuntimeState>();
+    let preferences = {
+        let mut preferences = state
+            .pet_preferences
+            .lock()
+            .map_err(|_| "桌宠本机设置锁不可用")?;
+        preferences.mouse_through = false;
+        preferences.clone()
+    };
+    persist_desktop_pet_preferences(&state)?;
+    if let Some(window) = app.get_webview_window("pet") {
+        window.set_ignore_cursor_events(false).map_err(|error| error.to_string())?;
+    }
+    app.emit_to("pet", "learnflow:desktop-pet-preferences-updated", &preferences)
+        .map_err(|error| error.to_string())
+}
+
+fn toggle_desktop_pet(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("pet") {
+        if window.is_visible().map_err(|error| error.to_string())? {
+            return hide_desktop_pet(app);
+        }
+    }
+    request_desktop_pet(app)
+}
+
+fn configure_system_tray(app: &tauri::App) -> tauri::Result<()> {
+    let toggle_pet = MenuItemBuilder::with_id(PET_TRAY_TOGGLE_ID, "显示 / 隐藏桌宠").build(app)?;
+    let open_main = MenuItemBuilder::with_id(PET_TRAY_OPEN_MAIN_ID, "打开 LearnFlow").build(app)?;
+    let restore_mouse = MenuItemBuilder::with_id(PET_TRAY_DISABLE_MOUSE_THROUGH_ID, "恢复桌宠鼠标交互").build(app)?;
+    let quit = MenuItemBuilder::with_id(PET_TRAY_QUIT_ID, "退出 LearnFlow").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .items(&[&toggle_pet, &open_main, &restore_mouse])
+        .separator()
+        .item(&quit)
+        .build()?;
+    let icon = app.default_window_icon().cloned()
+        .ok_or_else(|| tauri::Error::AssetNotFound("默认窗口图标不可用".into()))?;
+    TrayIconBuilder::with_id("learnflow-desktop")
+        .tooltip(format!("LearnFlow 桌宠（{PET_GLOBAL_SHORTCUT_LABEL}）"))
+        .menu(&menu)
+        .icon(icon)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            PET_TRAY_TOGGLE_ID => { let _ = toggle_desktop_pet(app); }
+            PET_TRAY_OPEN_MAIN_ID => { let _ = show_desktop_main(app); }
+            PET_TRAY_DISABLE_MOUSE_THROUGH_ID => { let _ = disable_desktop_pet_mouse_through(app); }
+            PET_TRAY_QUIT_ID => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
+                | TrayIconEvent::DoubleClick { button: MouseButton::Left, .. }) {
+                let _ = toggle_desktop_pet(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+struct SingleInstanceGuard {
+    activation_event: HANDLE,
+    shutdown_event: HANDLE,
+    listener: Option<thread::JoinHandle<()>>,
+}
+
+#[cfg(target_os = "windows")]
+impl SingleInstanceGuard {
+    fn acquire() -> Result<Option<Self>, String> {
+        let name: Vec<u16> = "Local\\LearnFlowDesktopActivation-v1".encode_utf16().chain(std::iter::once(0)).collect();
+        let activation_event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+        if activation_event.is_null() {
+            return Err(format!("无法创建 LearnFlow 单实例事件：{}", unsafe { GetLastError() }));
+        }
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+            unsafe { SetEvent(activation_event); CloseHandle(activation_event); }
+            return Ok(None);
+        }
+        let shutdown_event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        if shutdown_event.is_null() {
+            unsafe { CloseHandle(activation_event); }
+            return Err(format!("无法创建 LearnFlow 退出事件：{}", unsafe { GetLastError() }));
+        }
+        Ok(Some(Self { activation_event, shutdown_event, listener: None }))
+    }
+
+    fn start(&mut self, app: tauri::AppHandle) {
+        let activation_event = self.activation_event as usize;
+        let shutdown_event = self.shutdown_event as usize;
+        self.listener = Some(thread::spawn(move || {
+            let handles = [activation_event as HANDLE, shutdown_event as HANDLE];
+            loop {
+                let signaled = unsafe { WaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), 0, INFINITE) };
+                if signaled == WAIT_OBJECT_0 {
+                    let _ = show_desktop_main(&app);
+                    let _ = app.emit_to("main", INSTANCE_ACTIVATED_EVENT, ());
+                } else { break; }
+            }
+        }));
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        unsafe { SetEvent(self.shutdown_event); }
+        if let Some(listener) = self.listener.take() { let _ = listener.join(); }
+        unsafe { CloseHandle(self.activation_event); CloseHandle(self.shutdown_event); }
+    }
+}
+
 fn request_desktop_pet_selection_capture(app: &tauri::AppHandle) -> Result<(), String> {
     let Some(window) = app.get_webview_window("pet") else {
         return Ok(());
@@ -747,8 +875,18 @@ fn reserve_loopback_port() -> u16 {
 }
 
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    let mut single_instance = match SingleInstanceGuard::acquire() {
+        Ok(Some(guard)) => guard,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("LearnFlow 单实例保护不可用：{error}");
+            return;
+        }
+    };
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
@@ -768,6 +906,7 @@ pub fn run() {
             desktop_pet_auth_token,
         ])
         .setup(|app| {
+            configure_system_tray(app)?;
             let port = reserve_loopback_port();
             let port_argument = port.to_string();
             let token = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
@@ -787,6 +926,8 @@ pub fn run() {
                 database_path.to_string_lossy().replace('\\', "/")
             );
             let settings_path = app_data_dir.join("settings.env");
+            let plugin_artifact_dir = app_data_dir.join("plugin-artifacts");
+            std::fs::create_dir_all(&plugin_artifact_dir)?;
             let pet_preferences_path = app_data_dir.join("desktop-pet-settings.json");
             let pet_preferences = load_desktop_pet_preferences(&pet_preferences_path);
             let command = app
@@ -800,6 +941,7 @@ pub fn run() {
                 .env("REPO_FILES_DIR", source_cache_dir.to_string_lossy().as_ref())
                 .env("SOURCE_UPLOADS_DIR", source_uploads_dir.to_string_lossy().as_ref())
                 .env("LEARNFLOW_SETTINGS_PATH", settings_path.to_string_lossy().as_ref())
+                .env("PLUGIN_ARTIFACT_DIR", plugin_artifact_dir.to_string_lossy().as_ref())
                 // A learner-visible memory graph must continuously consume
                 // eligible Fact batches into versioned Module/Claim nodes.
                 .env("MEMORY_AUTO_SYNTHESIS_ENABLED", "true")
@@ -823,6 +965,9 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building LearnFlow desktop application");
+
+    #[cfg(target_os = "windows")]
+    single_instance.start(app.handle().clone());
 
     app.run(|handle, event| {
         match event {

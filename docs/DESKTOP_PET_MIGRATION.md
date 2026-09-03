@@ -113,7 +113,7 @@ Tauri：`src-tauri/src/lib.rs`、`src-tauri/capabilities/default.json`、`Cargo.
 - **回归红线**：restricted 分支不得破坏常规 turn（不带这些字段时行为不变）。
 
 ### D5 — 桌宠窗口/OS 能力范围（推荐：分两档）
-- **档位 A（最小可用，推荐波次一先做）**：`new WebviewWindow('pet', {...})` + 透明无边框置顶小窗；窗口 label 门禁；`capabilities` 增对 `"pet"` 的授权；关闭即隐藏；主窗↔pet 导航 request/ack；一个顶栏"打开桌宠"按钮。托盘/快捷键/选区截图/贴边作为档位 B 后置。
+- **档位 A（最小可用，推荐波次一先做）**：`new WebviewWindow('pet', {...})` + 透明无边框置顶小窗；窗口 label 门禁；`capabilities` 增对 `"pet"` 的授权；关闭即隐藏；主窗↔pet 导航 request/ack；一个顶栏"打开桌宠"按钮。该档位现已完成，并额外包含托盘、全局快捷键、选区截图与单实例唤醒。
 - **档位 B（完整桌面体验）**：从 LF `lib.rs` 全量移植托盘、`Ctrl+Alt+P`、单实例、dock/贴边、`capture_desktop_pet_ocr/selection`。工作量与风险主要集中在这一档（Windows PowerShell OCR / CopyFromScreen / 窗口动画），且 LF 该部分含在途调试代码，需重写而非照抄。
 
 ### D6 — 前后端 source_ref / 字幕双份常量
@@ -297,7 +297,8 @@ Tauri：capabilities(default.json) + lib.rs(窗口/托盘/命令) + Cargo/tauri.
 
 **Tauri / 桌面**
 - `cargo check`/`npm run build` 通过；sidecar 能起、端口随机、token 注入正确。
-- 档位 B：托盘显示/隐藏/退出、`Ctrl+Alt+P` 仅 pet 可见时抓取、第二实例唤醒第一实例、几何/贴边异常坐标回退。
+- 已完成：托盘显示/隐藏/退出、`Ctrl+Alt+P` 仅 pet 可见时抓取、第二实例唤醒第一实例、几何异常坐标回退。
+- 波次二：OS 贴边 dock、紧凑视图动画与贴边恢复，以及字幕 `source_ref` 链路。
 
 **架构红线**
 - 全程无第四类 Agent、无第二套消息表、无对 KernelState/Memory Graph/EvidenceEvent 的直接写（pet 测试已含"零 EvidenceEvent/KernelMutation"断言，保留之）。
@@ -348,7 +349,7 @@ Tauri：capabilities(default.json) + lib.rs(窗口/托盘/命令) + Cargo/tauri.
 ### 11.3 偏差与说明
 
 1. **选区抓取提前（D5 已拍板）**：`capture_desktop_pet_selection` 及其前台窗口捕获链从 snapshot 移植进波次一；字幕 `source_ref`/`desktop-pet-subtitles.ts` 仍留波次二，未拷贝。
-2. **波次二 Rust 后置**：托盘、edgeAutoHide 的 OS 贴边 dock、compact-dock/动画/`restore_desktop_pet_dock`/`set_desktop_pet_view`、单实例守卫**未移植**。`edgeAutoHide`/`mouseThrough` 偏好可持久化；`mouseThrough` 用 `set_ignore_cursor_events` 即时生效（无托盘恢复入口，属波次二补齐范围）。
+2. **安装壳补齐（2026-09-03）**：已移植托盘、单实例守卫和鼠标穿透恢复入口；第二次启动会唤醒首实例的主窗口并保留当前工作区。sidecar 现在获得独立的 `PLUGIN_ARTIFACT_DIR`，构建脚本只在仓库实际存在 `plugins/dist` 时才嵌入插件资源。`edgeAutoHide` 的 OS 贴边 dock、compact-dock 动画、`restore_desktop_pet_dock` 与 `set_desktop_pet_view`仍留波次二，不能把前端紧凑视图误称为 OS 自动贴边。
 3. **B16 `tutor.ts` 未改**（文档标注"如需"）：pet 回合走后端 restricted 分支 + `context_refs`，主窗纯文本 payload 未触碰。
 4. **C7 版本偏差**：文档建议 `Pillow==11.3.0`（LF pin）；all 环境实测已解析 `Pillow==12.3.0` 且全量回归绿，故按实测版本显式 pin（`openai==1.109.1`、`Pillow==12.3.0`），避免无谓降级。
 5. **C2 `tauri.conf.json` 未改**：现有 CSP/单窗口配置已覆盖 pet（同源共享 index.html；pet 窗由前端 `WebviewWindow('pet',…)` 运行时创建）。
@@ -361,4 +362,4 @@ Tauri：capabilities(default.json) + lib.rs(窗口/托盘/命令) + Cargo/tauri.
 
 ### 11.5 波次二待办（未动）
 
-`desktop-pet-subtitles.ts` + 时间轴 source_ref UI/服务端、字幕 test（C6 脚本挂载）、`test_desktop_pet_source_ref.py`、dock/紧凑动画与 OS 贴边、托盘（含 mouseThrough 恢复入口）、单实例唤醒。
+`desktop-pet-subtitles.ts` + 时间轴 source_ref UI/服务端、字幕 test（C6 脚本挂载）、`test_desktop_pet_source_ref.py`、dock/紧凑动画与 OS 贴边。
