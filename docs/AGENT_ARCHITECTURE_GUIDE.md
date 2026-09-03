@@ -1,5 +1,7 @@
 # LearnFlow 智能体架构与协作指南
 
+Contract impact（`2026-09-03.2`）：桌宠视觉适配器使用当前账户的视觉模型配置：可独立保存加密视觉凭据，或显式回退同一账户的 Tutor 凭据；Base URL 与模型名称按账户保存。两类密钥使用不同 AAD 用途，桌宠 capability 不能读取凭据。截图仍须用户主动提供、确认并只随一个正式 Tutor 回合消费，视觉观察不构成掌握、评分、策略或五核证据。
+
 Contract impact（`2026-09-02.7`）：从学习任务队列或确认卡进入正式任务时，前端不再只打开来源页面，而是启动/恢复该 `LearningTask`、恢复原 Conversation/Session scope、切换到 `guided_learning` 并创建浏览器 `LearningTaskBinding`。随后首个正式 SkillRun 请求携带 `learning_task_id`，运行时验证 learner/project/checkpoint/session 后把 SkillRun 绑定到同一任务；重复请求重放现有运行，不生成第二条原子任务。该变化只补齐 Tutor 主状态到正式 SkillRun 的既有包含关系，不新增状态机、Agent、事件或掌握写入。
 
 Contract impact（`2026-09-02.6`）：点击或拖入的 Plugin Object 在发送时同时保留学习者可见引用文本与已校验结构化信封。学习型任务转化可据此精确锁定被引用的 `task` label/摘要，把 `plugin-object://` 仅保存为来源，不再让“引用插件对象”包装语或 URI 污染任务契约；宿主保持插件无关。候选确认会把原正式 Session、Chat、纸张及插件对象引用传入正式 `LearningTask.source_refs`，因此任务队列的“回到学习现场”重新打开同一对话和纸张；旧任务由客户端按 session 或项目内最近转化对话兼容恢复。插件请求指纹与后端幂等输入保持同构，隐藏控制回合不再影响上下文、对话标题、纸张预览、输入计数或中断恢复。现有项目范围、双确认、Practice 评分与五核证据边界不变。

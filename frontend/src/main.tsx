@@ -1895,7 +1895,9 @@ function App({ auth }: { auth: AuthGateSession }) {
       }
     }
 
-    const configurationIssue = tutorConfigurationIssue(workspace.settings.baseUrl, workspace.settings.model)
+    const configurationIssue = isDesktopRuntime()
+      ? ''
+      : tutorConfigurationIssue(workspace.settings.baseUrl, workspace.settings.model)
     const optimisticTurnStep = learningProjection ? currentLearningSkillStep(learningProjection) : undefined
 
     // Paint the learner turn before any formal persistence or context work.

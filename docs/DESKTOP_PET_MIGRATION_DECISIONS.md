@@ -38,15 +38,15 @@
 
 ## D3 — 视觉模型（图片观察）来源
 
-**背景**：LF 的图片视觉走**后端账户级**视觉 provider（独立 API key/base/model，独立加密 AAD）。all 后端只有 `.env VISION_*`（Moonshot）+ `/settings/test-vision`；all 的账户级加密凭证目前只在 vite/Node 运行时解析（主窗 Tutor 用），后端并没有一套"按账户解密视觉 key"的设施。
+**背景**：桌宠图片视觉需要与 `LearnFlow-pet` 一致，使用当前账户范围的视觉 provider（独立 API key/base/model，独立加密 AAD），并允许显式复用同一账户的 Tutor Key。
 
 | 选项 | 内容 | 影响 |
 | --- | --- | --- |
-| **A（推荐）** | pet 视觉改用 all 后端 `.env VISION_*`（把 `desktop_pet_vision.py` 的 provider 解析从 LF 账户级改为 all settings.vision_*） | 对齐 all 现状、改动小、服务端可控；代价：视觉模型与 Tutor 模型同走 .env，不再支持"账户各自配视觉 key" |
-| B | 把 LF"后端账户级视觉凭证"体系整体搬进 all（加密存储/解密/AAD 用途扩展） | 能力最全，但范围大，建议单独立项 |
+| A | pet 视觉改用 all 后端 `.env VISION_*` | 服务端统一配置，但无法按账户隔离视觉模型 |
+| **B（已采用）** | 把 `LearnFlow-pet` 的后端账户级视觉凭证体系搬进 all（加密存储/解密/AAD 用途扩展） | 支持独立视觉 Key、Base URL、模型名及复用 Tutor Key；需同步认证、迁移、API、桌宠和测试 |
 | C | 波次一先不做图片视觉理解（仅文字/文档/字幕/复习提醒），图片后置 | 最稳，砍功能 |
 
-勾选：`[ ] A`　`[ ] B`　`[ ] C`
+勾选：`[ ] A`　`[x] B`　`[ ] C`
 
 ---
 
@@ -83,7 +83,7 @@
 | --- | --- | --- |
 | D1 | **A** | 波次一先迁 LF `d8607a5` 桌宠主链路；波次二在途特性后置 |
 | D2 | **A** | 照 `role_package_launch` 模板新建 `lfpet_` capability |
-| D3 | **A** | 视觉走 all 后端 `.env VISION_*` |
+| D3 | **B** | 视觉走当前账户级配置，未设置独立 Key 时复用 Tutor Key |
 | D4 | **A** | `context_refs` + restricted 受限回合 |
 | D5 | **档位 A + 快捷键** | 见下"D5 补充决议" |
 | D6 | **A** | 抽单一共享常量源（波次二前做） |
@@ -121,6 +121,6 @@
 
 > D1=＿　D2=＿　D3=＿　D4=＿　D5=＿　D6=＿（例：D1=A, D2=A, D3=A, D4=A, D5=档位A, D6=A）
 
-**默认全推荐**：D1=A（先主链路后特性）→ D2=A（新建 lfpet_ capability）→ D3=A（.env VISION_*）→ D4=A（context_refs + restricted）→ D5=档位 A（最小 pet 窗先行）→ D6=A（共享常量，波次二前）。
+**默认全推荐**：D1=A（先主链路后特性）→ D2=A（新建 lfpet_ capability）→ D3=B（账户级视觉配置）→ D4=A（context_refs + restricted）→ D5=档位 A（最小 pet 窗先行）→ D6=A（共享常量，波次二前）。
 
 全部按推荐即为**波次一 = 桌宠主链路最小可用**；若 D1 选 B、D3 选 B、D5 选 A+B，则为**完整版一次到位**。

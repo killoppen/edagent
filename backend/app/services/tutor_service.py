@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import openai_chat_provider_kwargs, settings
 from app.models.learning import (
     AgentSession, AgentMessage, AgentAction, EvidenceEvent, LearnerProfile,
-    LearningProjectProposal, LearningSkillRun, LearningTask, MicroLearningRun,
+    Learner, LearningProjectProposal, LearningSkillRun, LearningTask, MicroLearningRun,
+    UserAccount,
 )
 from app.models.project import Project, Source, Roadmap, Checkpoint, Task
 from app.schemas.agent import TutorModelOutput
@@ -66,6 +67,13 @@ from app.services.chat_modes import (
     complete_explanation_mode,
     enter_chat_mode,
 )
+from app.services.auth import (
+    AccountModelProviderConfig,
+    ModelCredentialDecryptionError,
+    ModelCredentialEncryptionUnavailable,
+    account_model_provider_config,
+    model_credential_configured,
+)
 
 
 CONFIRM_WORDS = {
@@ -84,6 +92,35 @@ MICRO_LEARNING_MARKERS = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _session_model_provider_config(
+    db: AsyncSession,
+    session: AgentSession,
+) -> AccountModelProviderConfig | None:
+    """Resolve the learner's account provider without mutating global settings."""
+    account = (await db.execute(
+        select(UserAccount)
+        .join(Learner, Learner.user_id == UserAccount.id)
+        .where(Learner.id == session.learner_id)
+    )).scalar_one_or_none()
+    if account and model_credential_configured(account):
+        try:
+            return account_model_provider_config(account)
+        except (ModelCredentialEncryptionUnavailable, ModelCredentialDecryptionError) as exc:
+            logger.warning(
+                "Account model credential is unavailable for learner %s: %s",
+                session.learner_id,
+                type(exc).__name__,
+            )
+            return None
+    if settings.llm_api_key and settings.llm_api_key not in {"", "***", "sk-your-key-here"}:
+        return AccountModelProviderConfig(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+        )
+    return None
 
 
 def _looks_like_micro_learning_command(message: str) -> bool:
@@ -1916,7 +1953,8 @@ async def _generate_tutor_reply(
     latest_interaction = str(
         latest_context.get("interaction") or ""
     )
-    if not settings.llm_api_key or settings.llm_api_key in {"", "***", "sk-your-key-here"}:
+    provider_config = await _session_model_provider_config(db, session)
+    if not provider_config:
         return workflow_fallback or "未接入模型。", [], None, None, [], None, None
 
     latest_query = latest_messages[-1].content if latest_messages else ""
@@ -2226,23 +2264,23 @@ async def _generate_tutor_reply(
     model_budget = max(0.01, settings.tutor_model_budget_seconds)
     deadline = model_deadline(model_budget)
     provider_kwargs = openai_chat_provider_kwargs(
-        settings.llm_base_url,
-        settings.llm_model,
+        provider_config.base_url,
+        provider_config.model,
         thinking_enabled=False,
     )
     llm = ChatOpenAI(
-        model=settings.llm_model,
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
+        model=provider_config.model,
+        api_key=provider_config.api_key,
+        base_url=provider_config.base_url,
         temperature=0.45,
         timeout=max(1.0, model_budget),
         max_retries=0,
         **provider_kwargs,
     )
     plain_llm = ChatOpenAI(
-        model=settings.llm_model,
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
+        model=provider_config.model,
+        api_key=provider_config.api_key,
+        base_url=provider_config.base_url,
         temperature=0.45,
         timeout=max(1.0, model_budget),
         max_retries=0,

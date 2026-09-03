@@ -17,7 +17,7 @@ from typing import Any
 from app.services.action_board import ACTION_BOARD
 
 
-REGISTRY_VERSION = "2026-09-03.1"
+REGISTRY_VERSION = "2026-09-03.2"
 EVENT_SCHEMA_VERSION = "learnflow.evidence.v1"
 SKILL_SPEC_VERSION = "learnflow.skill.v3"
 # The learner-facing SkillSpec changed in this registry release.
@@ -380,7 +380,7 @@ TOOLS = {
         ToolContract("desktop_pet_gateway", "Desktop Pet Least-privilege Gateway", "tutor_agent", "desktop", "adapter",
                      (), (), "short-lived parent-session-bound opaque capability token -> owned formal AgentSession, LearningTask, SkillRun, ReviewSchedule and LearningFile read-only summaries and continuation turns; the desktop-pet window continues only an existing formal session as a restricted desktop-pet identity that may attach confirmed external context references (TTL-bound, session-confirmed, consumed by exactly one Tutor turn) and can never change session scope or execute session actions on send; assistant replies reuse the existing safe Markdown renderer and pet navigation waits for a main-window acknowledgement before reporting success; highlighted-text and foreground-capture transcription is delegated to the server vision channel; raw content stays TTL-only, is cleared on close or consumption and never enters an AgentMessage, and no operation writes an EvidenceEvent or KernelState"),
         ToolContract("desktop_pet_vision_observer", "Desktop Pet Image Observation Adapter", "tutor_agent", "desktop", "adapter",
-                     (), (), "explicit foreground image paste or local file selection -> local thumbnail preview -> in-memory validation, EXIF-stripping normalization and server-scoped OpenAI-compatible vision call (backend .env VISION_* settings, not learner account credentials) -> bounded untrusted image_observation TTL context; the labeled send action is the explicit request and confirmation for that attached image, raw image bytes never enter AgentMessage, EvidenceEvent, KernelState or persistent storage, and the single-turn consumption gate remains authoritative"),
+                     (), (), "explicit foreground image paste or local file selection -> local thumbnail preview -> in-memory validation, EXIF-stripping normalization and account-scoped OpenAI-compatible vision call (dedicated encrypted vision credential or the same learner's Tutor credential) -> bounded untrusted image_observation TTL context; the labeled send action is the explicit request and confirmation for that attached image, raw image bytes never enter AgentMessage, EvidenceEvent, KernelState or persistent storage, and the single-turn consumption gate remains authoritative"),
         ToolContract("computer_knowledge_search", "Explanation-oriented Computer Knowledge Search", "learning_design_agent", "vnext", "read",
                      (), (), "privacy scrub -> bounded facet plan -> tiered adapters + circuit breakers -> hybrid deterministic rerank/MMR -> coverage audit -> one bounded gap search -> versioned untrusted evidence bundle; quick/standard/deep budgets and no learner-state write"),
         ToolContract("web_evidence_reader", "Allow-listed Web Evidence Reader", "learning_design_agent", "vnext", "read",

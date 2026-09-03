@@ -101,6 +101,13 @@ class UserAccount(Base):
             "AND api_key_hint IS NOT NULL AND api_key_encryption_version IS NOT NULL)",
             name="ck_user_accounts_api_key_envelope",
         ),
+        CheckConstraint(
+            "(vision_api_key_ciphertext IS NULL AND vision_api_key_nonce IS NULL "
+            "AND vision_api_key_hint IS NULL AND vision_api_key_encryption_version IS NULL) OR "
+            "(vision_api_key_ciphertext IS NOT NULL AND vision_api_key_nonce IS NOT NULL "
+            "AND vision_api_key_hint IS NOT NULL AND vision_api_key_encryption_version IS NOT NULL)",
+            name="ck_user_accounts_vision_api_key_envelope",
+        ),
     )
 
     id = Column(Integer, primary_key=True)
@@ -130,6 +137,15 @@ class UserAccount(Base):
     api_key_hint = Column(String(32), nullable=True)
     api_key_encryption_version = Column(Integer, nullable=True)
     api_key_updated_at = Column(DateTime, nullable=True)
+    provider_base_url = Column(String(2048), nullable=True)
+    provider_model = Column(String(200), nullable=True)
+    vision_api_key_ciphertext = Column(Text, nullable=True)
+    vision_api_key_nonce = Column(String(32), nullable=True)
+    vision_api_key_hint = Column(String(32), nullable=True)
+    vision_api_key_encryption_version = Column(Integer, nullable=True)
+    vision_api_key_updated_at = Column(DateTime, nullable=True)
+    vision_provider_base_url = Column(String(2048), nullable=True)
+    vision_provider_model = Column(String(200), nullable=True)
 
 
 class AuthSession(Base):

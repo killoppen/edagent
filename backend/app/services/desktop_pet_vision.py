@@ -1,17 +1,8 @@
-"""Bounded visual observation for explicitly pasted desktop-pet images.
-
-The service never persists image bytes.  It normalizes an in-memory upload,
-asks the server-configured OpenAI-compatible vision model (all backend
-``VISION_*`` settings, D3) for a structured observation, and returns bounded
-text for the existing TTL context package.  Unlike LearnFlow's per-account
-vision credential pipeline, all routes pet vision through a single backend
-.env configuration so the model can be controlled server-side.
-"""
+"""Bounded visual observation for explicitly pasted desktop-pet images."""
 from __future__ import annotations
 
 import asyncio
 import base64
-from dataclasses import dataclass
 from io import BytesIO
 import json
 import warnings
@@ -22,6 +13,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core.config import openai_chat_provider_kwargs, settings
 from app.services.desktop_pet_context import MAX_CONTEXT_CHARS
+from app.services.auth import AccountModelProviderConfig
 
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
@@ -44,11 +36,7 @@ SELECTION_TRANSCRIPTION_SYSTEM_PROMPT = """你是 LearnFlow 桌宠的系统选�
 text 必须保留原文的中英文、数字、标点和换行；如果没有明确的系统高亮文字，返回空字符串。"""
 
 
-@dataclass(frozen=True)
-class PetVisionProviderConfig:
-    api_key: str
-    base_url: str
-    model: str
+PetVisionProviderConfig = AccountModelProviderConfig
 
 
 class NormalizedPetImage:
@@ -58,7 +46,7 @@ class NormalizedPetImage:
 
 
 def desktop_pet_vision_configured() -> bool:
-    """Whether a usable vision provider is configured server-side (.env VISION_*)."""
+    """Backward-compatible server configuration probe for legacy callers."""
     return bool(
         (settings.vision_api_key or settings.llm_api_key)
         and str(settings.vision_base_url or "").strip()
@@ -67,12 +55,7 @@ def desktop_pet_vision_configured() -> bool:
 
 
 def resolve_desktop_pet_vision_config() -> PetVisionProviderConfig:
-    """Resolve the server-configured vision provider for the desktop pet.
-
-    Per decision D3 pet vision shares the backend VISION_* settings with the
-    rest of all rather than LearnFlow's per-account vision credentials.  The
-    Tutor LLM key is accepted as a fallback when only LLM_* is set.
-    """
+    """Resolve the legacy process-level provider for compatibility tests."""
     api_key = str(settings.vision_api_key or settings.llm_api_key or "").strip()
     base_url = str(settings.vision_base_url or "").strip()
     model = str(settings.vision_model or "").strip()
@@ -225,7 +208,7 @@ async def observe_desktop_pet_image(
     except Exception as exc:
         status_code = getattr(exc, "status_code", None)
         if status_code in {400, 404, 415, 422}:
-            raise _image_error("当前配置的视觉模型不支持图片理解，请在设置中更换", 422) from None
+            raise _image_error("当前账户模型不支持图片理解，请在设置中更换", 422) from None
         raise _image_error("视觉模型暂时不可用，请稍后重试", 502) from None
     finally:
         await client.close()
@@ -270,7 +253,7 @@ async def transcribe_desktop_pet_selection(
     except Exception as exc:
         status_code = getattr(exc, "status_code", None)
         if status_code in {400, 404, 415, 422}:
-            raise _image_error("当前配置的视觉模型不支持图片理解，请在设置中更换", 422) from None
+            raise _image_error("当前账户模型不支持图片理解，请在设置中更换", 422) from None
         raise _image_error("选区文字识别暂时不可用，请稍后重试", 502) from None
     finally:
         await client.close()

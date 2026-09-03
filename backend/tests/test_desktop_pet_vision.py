@@ -11,8 +11,8 @@ from app.core.config import settings
 from app.db.database import async_session
 from app.main import app
 from app.models.learning import DesktopPetContextPackage
+from app.services.auth import AccountModelProviderConfig
 from app.services.desktop_pet_vision import (
-    PetVisionProviderConfig,
     _selection_text_from_response,
     normalize_desktop_pet_image,
     transcribe_desktop_pet_selection,
@@ -22,12 +22,6 @@ from app.services.desktop_pet_vision import (
 DESKTOP_TOKEN = "desktop-pet-vision-test-token"
 HEADERS = {"X-LearnFlow-Desktop-Token": DESKTOP_TOKEN}
 BROWSER_HEADERS = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
-VISION_TEST_CONFIG = PetVisionProviderConfig(
-    api_key="sk-vision-test-key",
-    base_url="https://provider.example/v1",
-    model="vision-test-model",
-)
-
 
 def registration(username: str) -> dict:
     return {
@@ -50,15 +44,6 @@ def png_bytes() -> bytes:
     output = BytesIO()
     image.save(output, format="PNG")
     return output.getvalue()
-
-
-def configure_server_vision(monkeypatch) -> None:
-    """D3: pet vision is driven by the backend .env VISION_* settings."""
-    monkeypatch.setattr(settings, "desktop_mode", True)
-    monkeypatch.setattr(settings, "desktop_token", DESKTOP_TOKEN)
-    monkeypatch.setattr(settings, "vision_api_key", VISION_TEST_CONFIG.api_key)
-    monkeypatch.setattr(settings, "vision_base_url", VISION_TEST_CONFIG.base_url)
-    monkeypatch.setattr(settings, "vision_model", VISION_TEST_CONFIG.model)
 
 
 def test_desktop_pet_image_normalization_rejects_invalid_and_removes_alpha():
@@ -101,14 +86,14 @@ def test_desktop_pet_selection_transcription_uses_strict_text_prompt(monkeypatch
     monkeypatch.setattr("app.services.desktop_pet_vision.AsyncOpenAI", FakeAsyncOpenAI)
     result = asyncio.run(transcribe_desktop_pet_selection(
         normalize_desktop_pet_image(png_bytes()),
-        provider_config=VISION_TEST_CONFIG,
+        provider_config=AccountModelProviderConfig("key", "https://provider.example/v1", "vision-test"),
     ))
     assert result == "选中的中文 English 123"
     assert calls[0]["temperature"] == 0
     assert "高亮选区" in calls[0]["messages"][0]["content"]
 
 
-def test_desktop_pet_selection_endpoint_accepts_capability_scope():
+def test_desktop_pet_selection_endpoint_accepts_capability_scope(monkeypatch):
     from starlette.requests import Request
 
     from app.services.auth import _required_desktop_pet_scope
@@ -127,11 +112,10 @@ def test_desktop_pet_selection_endpoint_accepts_capability_scope():
 
 
 def test_desktop_pet_selection_endpoint_accepts_capability_token(monkeypatch):
-    configure_server_vision(monkeypatch)
-    monkeypatch.setattr(
-        "app.api.pet.resolve_desktop_pet_vision_config",
-        lambda: VISION_TEST_CONFIG,
-    )
+    monkeypatch.setattr(settings, "desktop_mode", True)
+    monkeypatch.setattr(settings, "desktop_token", DESKTOP_TOKEN)
+    monkeypatch.setattr("app.api.pet.model_credential_configured", lambda account: True)
+    monkeypatch.setattr("app.api.pet.account_vision_provider_config", lambda account: object())
     monkeypatch.setattr(
         "app.api.pet.transcribe_desktop_pet_selection",
         lambda image, provider_config: asyncio.sleep(0, result="选区文字"),
@@ -178,7 +162,13 @@ def test_desktop_pet_image_context_is_idempotent_and_ttl_only(monkeypatch):
         async def close(self):
             return None
 
-    configure_server_vision(monkeypatch)
+    monkeypatch.setattr(settings, "desktop_mode", True)
+    monkeypatch.setattr(settings, "desktop_token", DESKTOP_TOKEN)
+    monkeypatch.setattr(
+        settings,
+        "auth_api_key_kek",
+        base64.urlsafe_b64encode(b"V" * 32).decode().rstrip("="),
+    )
     monkeypatch.setattr("app.services.desktop_pet_vision.AsyncOpenAI", FakeAsyncOpenAI)
 
     with TestClient(app) as raw_client:
@@ -189,7 +179,23 @@ def test_desktop_pet_image_context_is_idempotent_and_ttl_only(monkeypatch):
             json=registration("desktop_pet_image_owner"),
         )
         assert issued.status_code == 200, issued.text
+        bearer = issued.json()["desktop_auth_token"]
         capability = issued.json()["desktop_pet_capability_token"]
+        csrf = raw_client.get("/api/auth/csrf", headers=HEADERS).json()["csrf_token"]
+        configured = raw_client.put(
+            "/api/auth/model-credential",
+            headers={
+                **HEADERS,
+                "Authorization": f"Bearer {bearer}",
+                "X-CSRF-Token": csrf,
+            },
+            json={
+                "api_key": "sk-vision-test-key",
+                "base_url": "https://provider.example/v1",
+                "model": "vision-test-model",
+            },
+        )
+        assert configured.status_code == 200, configured.text
 
         pet_headers = {**HEADERS, "Authorization": f"Bearer {capability}"}
         request_id = "desktop-pet-image:stable-request-001"

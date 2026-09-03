@@ -27,7 +27,13 @@ from app.models.learning import (
     UserAccount,
 )
 from app.models.project import Checkpoint, Project, Roadmap
-from app.services.auth import ModelCredentialDecryptionError, decrypt_model_credential
+from app.services.auth import (
+    ModelCredentialDecryptionError,
+    account_model_provider_config,
+    account_vision_provider_config,
+    decrypt_model_credential,
+    decrypt_vision_credential,
+)
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -272,6 +278,15 @@ def test_fresh_database_auth_migration_is_idempotent(tmp_path):
         "api_key_hint",
         "api_key_encryption_version",
         "api_key_updated_at",
+        "provider_base_url",
+        "provider_model",
+        "vision_api_key_ciphertext",
+        "vision_api_key_nonce",
+        "vision_api_key_hint",
+        "vision_api_key_encryption_version",
+        "vision_api_key_updated_at",
+        "vision_provider_base_url",
+        "vision_provider_model",
     }.issubset(account_columns)
 
 
@@ -418,6 +433,8 @@ def test_account_model_credential_encrypted_crud_empty_preserve_and_test(monkeyp
             "configured": False,
             "key_hint": "",
             "updated_at": None,
+            "base_url": "",
+            "model": "",
         }
         # Empty submissions are an explicit no-op and do not require a KEK.
         preserved_empty = client.put(
@@ -453,12 +470,18 @@ def test_account_model_credential_encrypted_crud_empty_preserve_and_test(monkeyp
 
         saved = client.put(
             "/api/auth/model-credential",
-            json={"api_key": secret},
+            json={
+                "api_key": secret,
+                "base_url": "https://provider.example/v1/chat/completions",
+                "model": "credential-test-model",
+            },
         )
         assert saved.status_code == 200, saved.text
-        assert set(saved.json()) == {"configured", "key_hint", "updated_at"}
+        assert set(saved.json()) == {"configured", "key_hint", "updated_at", "base_url", "model"}
         assert saved.json()["configured"] is True
         assert saved.json()["key_hint"] == "sk-…7890"
+        assert saved.json()["base_url"] == "https://provider.example/v1"
+        assert saved.json()["model"] == "credential-test-model"
         assert secret not in saved.text
 
         bridge_unconfigured = client.post(
@@ -514,6 +537,8 @@ def test_account_model_credential_encrypted_crud_empty_preserve_and_test(monkeyp
             "api_key": secret,
             "key_hint": "sk-…7890",
             "version": 1,
+            "base_url": "https://provider.example/v1",
+            "model": "credential-test-model",
         }
 
         async def encrypted_snapshot():
@@ -577,10 +602,7 @@ def test_account_model_credential_encrypted_crud_empty_preserve_and_test(monkeyp
         import openai
 
         monkeypatch.setattr(openai, "AsyncOpenAI", FakeAsyncOpenAI)
-        tested = client.post("/api/auth/model-credential/test", json={
-            "base_url": "https://provider.example/v1/chat/completions",
-            "model": "credential-test-model",
-        })
+        tested = client.post("/api/auth/model-credential/test", json={})
         assert tested.status_code == 200, tested.text
         assert tested.json()["status"] == "ok"
         assert tested.json()["model"] == "credential-test-model"
@@ -591,11 +613,180 @@ def test_account_model_credential_encrypted_crud_empty_preserve_and_test(monkeyp
         assert deleted.status_code == 200
         assert deleted.json()["configured"] is False
         assert deleted.json()["key_hint"] == ""
+        assert deleted.json()["base_url"] == ""
+        assert deleted.json()["model"] == ""
         assert secret not in deleted.text
         assert client.post(
             "/api/auth/model-credential/test",
             json={"base_url": "https://provider.example/v1", "model": "model"},
         ).status_code == 409
+
+
+def test_account_vision_credential_isolated_from_tutor_and_supports_reuse(monkeypatch):
+    tutor_secret = "sk-tutor-secret-1234567890"
+    vision_secret = "sk-vision-secret-0987654321"
+    kek = base64.urlsafe_b64encode(b"V" * 32).decode().rstrip("=")
+    monkeypatch.setattr(settings, "auth_api_key_kek", kek)
+    with TestClient(app) as raw_client:
+        client = browser(raw_client)
+        created = client.post(
+            "/api/auth/register",
+            json=registration("vision_credential_owner"),
+        )
+        assert created.status_code == 200, created.text
+        bind_csrf(client)
+
+        tutor_saved = client.put(
+            "/api/auth/model-credential",
+            json={
+                "api_key": tutor_secret,
+                "base_url": "https://tutor.example/v1",
+                "model": "tutor-model",
+            },
+        )
+        assert tutor_saved.status_code == 200, tutor_saved.text
+
+        inherited = client.get("/api/auth/vision-credential")
+        assert inherited.status_code == 200, inherited.text
+        inherited_body = inherited.json()
+        assert inherited_body == {
+            "configured": True,
+            "uses_tutor_key": True,
+            "key_hint": "sk-…7890",
+            "updated_at": inherited_body["updated_at"],
+            "base_url": "https://tutor.example/v1",
+            "model": "tutor-model",
+        }
+
+        vision_saved = client.put(
+            "/api/auth/vision-credential",
+            json={
+                "api_key": vision_secret,
+                "base_url": "https://vision.example/v1/chat/completions",
+                "model": "vision-model",
+            },
+        )
+        assert vision_saved.status_code == 200, vision_saved.text
+        assert vision_saved.json()["configured"] is True
+        assert vision_saved.json()["uses_tutor_key"] is False
+        assert vision_saved.json()["key_hint"] == "sk-…4321"
+        assert vision_saved.json()["base_url"] == "https://vision.example/v1"
+        assert vision_secret not in vision_saved.text
+
+        async def credential_snapshot():
+            async with async_session() as db:
+                account = (await db.execute(select(UserAccount).where(
+                    UserAccount.username_normalized == "vision_credential_owner"
+                ))).scalar_one()
+                vision_config = account_vision_provider_config(account)
+                tutor_config = account_model_provider_config(account)
+                return {
+                    "id": account.id,
+                    "tutor_ciphertext": account.api_key_ciphertext,
+                    "tutor_nonce": account.api_key_nonce,
+                    "tutor_hint": account.api_key_hint,
+                    "tutor_version": account.api_key_encryption_version,
+                    "vision_ciphertext": account.vision_api_key_ciphertext,
+                    "vision_nonce": account.vision_api_key_nonce,
+                    "vision_hint": account.vision_api_key_hint,
+                    "vision_version": account.vision_api_key_encryption_version,
+                    "vision_config": vision_config,
+                    "tutor_config": tutor_config,
+                }
+
+        snapshot = asyncio.run(credential_snapshot())
+        assert snapshot["vision_config"].api_key == vision_secret
+        assert snapshot["vision_config"].base_url == "https://vision.example/v1"
+        assert snapshot["vision_config"].model == "vision-model"
+        assert snapshot["tutor_config"].api_key == tutor_secret
+        assert vision_secret not in str(snapshot["vision_ciphertext"])
+
+        tutor_envelope_as_vision = SimpleNamespace(
+            id=snapshot["id"],
+            vision_api_key_ciphertext=snapshot["tutor_ciphertext"],
+            vision_api_key_nonce=snapshot["tutor_nonce"],
+            vision_api_key_hint=snapshot["tutor_hint"],
+            vision_api_key_encryption_version=snapshot["tutor_version"],
+        )
+        vision_envelope_as_tutor = SimpleNamespace(
+            id=snapshot["id"],
+            api_key_ciphertext=snapshot["vision_ciphertext"],
+            api_key_nonce=snapshot["vision_nonce"],
+            api_key_hint=snapshot["vision_hint"],
+            api_key_encryption_version=snapshot["vision_version"],
+        )
+        with pytest.raises(ModelCredentialDecryptionError):
+            decrypt_vision_credential(tutor_envelope_as_vision)
+        with pytest.raises(ModelCredentialDecryptionError):
+            decrypt_model_credential(vision_envelope_as_tutor)
+
+        captured = {}
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                captured["request"] = kwargs
+                return SimpleNamespace(model="vision-model")
+
+        class FakeAsyncOpenAI:
+            def __init__(self, *, api_key, base_url):
+                captured["api_key"] = api_key
+                captured["base_url"] = base_url
+                self.chat = SimpleNamespace(completions=FakeCompletions())
+
+            async def close(self):
+                return None
+
+        import openai
+
+        monkeypatch.setattr(openai, "AsyncOpenAI", FakeAsyncOpenAI)
+        tested = client.post("/api/auth/vision-credential/test")
+        assert tested.status_code == 200, tested.text
+        assert tested.json()["model"] == "vision-model"
+        assert captured["api_key"] == vision_secret
+        assert captured["base_url"] == "https://vision.example/v1"
+        assert captured["request"]["messages"][0]["content"][1]["type"] == "image_url"
+
+        reused = client.put(
+            "/api/auth/vision-credential",
+            json={
+                "use_tutor_key": True,
+                "base_url": "https://reuse.example/v1",
+                "model": "reuse-vision-model",
+            },
+        )
+        assert reused.status_code == 200, reused.text
+        assert reused.json()["uses_tutor_key"] is True
+        assert reused.json()["key_hint"] == "sk-…7890"
+
+        async def reused_config():
+            async with async_session() as db:
+                account = (await db.execute(select(UserAccount).where(
+                    UserAccount.username_normalized == "vision_credential_owner"
+                ))).scalar_one()
+                return account_vision_provider_config(account)
+
+        reuse_config = asyncio.run(reused_config())
+        assert reuse_config.api_key == tutor_secret
+        assert reuse_config.base_url == "https://reuse.example/v1"
+        assert reuse_config.model == "reuse-vision-model"
+
+        removed = client.delete("/api/auth/vision-credential")
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["configured"] is True
+        assert removed.json()["uses_tutor_key"] is True
+        assert removed.json()["base_url"] == "https://tutor.example/v1"
+        assert removed.json()["model"] == "tutor-model"
+
+        async def restored_tutor_config():
+            async with async_session() as db:
+                account = (await db.execute(select(UserAccount).where(
+                    UserAccount.username_normalized == "vision_credential_owner"
+                ))).scalar_one()
+                return account_model_provider_config(account), account_vision_provider_config(account)
+
+        tutor_config, fallback_config = asyncio.run(restored_tutor_config())
+        assert tutor_config.api_key == tutor_secret
+        assert fallback_config == tutor_config
 
 
 def test_ryan_zero_admin_safe_projection_and_user_isolation(monkeypatch):

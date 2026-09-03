@@ -429,6 +429,17 @@ export type FormalModelCredentialMetadata = {
   configured: boolean
   key_hint: string
   updated_at?: string | null
+  base_url: string
+  model: string
+}
+
+export type FormalVisionCredentialMetadata = {
+  configured: boolean
+  uses_tutor_key: boolean
+  key_hint: string
+  updated_at?: string | null
+  base_url: string
+  model: string
 }
 
 export type FormalModelCredentialTestResult = {
@@ -584,10 +595,13 @@ export async function loadFormalModelCredential() {
   return jsonRequest<FormalModelCredentialMetadata>('/api/auth/model-credential')
 }
 
-export async function saveFormalModelCredential(apiKey: string) {
+export async function saveFormalModelCredential(apiKey: string, baseUrl = '', model = '') {
+  const body: Record<string, string> = { api_key: apiKey }
+  if (baseUrl.trim()) body.base_url = baseUrl
+  if (model.trim()) body.model = model
   return jsonRequest<FormalModelCredentialMetadata>('/api/auth/model-credential', {
     method: 'PUT',
-    body: JSON.stringify({ api_key: apiKey }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -601,6 +615,39 @@ export async function testFormalModelCredential(baseUrl: string, model: string) 
   return jsonRequest<FormalModelCredentialTestResult>('/api/auth/model-credential/test', {
     method: 'POST',
     body: JSON.stringify({ base_url: baseUrl, model }),
+  })
+}
+
+export async function loadFormalVisionCredential() {
+  return jsonRequest<FormalVisionCredentialMetadata>('/api/auth/vision-credential')
+}
+
+export async function saveFormalVisionCredential(input: {
+  apiKey: string
+  baseUrl: string
+  model: string
+  useTutorKey: boolean
+}) {
+  return jsonRequest<FormalVisionCredentialMetadata>('/api/auth/vision-credential', {
+    method: 'PUT',
+    body: JSON.stringify({
+      api_key: input.apiKey,
+      base_url: input.baseUrl,
+      model: input.model,
+      use_tutor_key: input.useTutorKey,
+    }),
+  })
+}
+
+export async function deleteFormalVisionCredential() {
+  return jsonRequest<FormalVisionCredentialMetadata>('/api/auth/vision-credential', {
+    method: 'DELETE',
+  })
+}
+
+export async function testFormalVisionCredential() {
+  return jsonRequest<FormalModelCredentialTestResult>('/api/auth/vision-credential/test', {
+    method: 'POST',
   })
 }
 

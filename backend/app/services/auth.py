@@ -92,6 +92,13 @@ class EncryptedModelCredential:
     version: int
 
 
+@dataclass(frozen=True)
+class AccountModelProviderConfig:
+    api_key: str
+    base_url: str
+    model: str
+
+
 INVALID_LOGIN_DETAIL = "用户名或密码错误"
 LOGIN_BACKOFF_DETAIL = "登录暂不可用，请稍后重试"
 CSRF_HEADER_NAME = "x-csrf-token"
@@ -100,6 +107,7 @@ _CSRF_CONTEXT = b"learnflow.session.csrf.v1"
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _KDF_LIMITER = threading.BoundedSemaphore(max(1, settings.auth_kdf_max_concurrency))
 _MODEL_CREDENTIAL_PURPOSE = "model-provider-api-key"
+_VISION_CREDENTIAL_PURPOSE = "vision-provider-api-key"
 _RUNTIME_BRIDGE_PATH = "/api/auth/model-credential/internal/resolve"
 _RUNTIME_BRIDGE_SENTINEL = "learnflow-runtime-bridge-unconfigured-sentinel"
 _NO_STORE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
@@ -284,10 +292,14 @@ def _model_credential_kek() -> tuple[bytes, int]:
     return key, version
 
 
-def _model_credential_aad(account_id: int, version: int) -> bytes:
+def _model_credential_aad(
+    account_id: int,
+    version: int,
+    purpose: str = _MODEL_CREDENTIAL_PURPOSE,
+) -> bytes:
     return (
         "learnflow|purpose="
-        f"{_MODEL_CREDENTIAL_PURPOSE}|account_id={int(account_id)}|version={int(version)}"
+        f"{purpose}|account_id={int(account_id)}|version={int(version)}"
     ).encode("utf-8")
 
 
@@ -320,6 +332,15 @@ def model_credential_configured(account: UserAccount) -> bool:
     )
 
 
+def vision_credential_configured(account: UserAccount) -> bool:
+    return bool(
+        account.vision_api_key_ciphertext
+        and account.vision_api_key_nonce
+        and account.vision_api_key_hint
+        and account.vision_api_key_encryption_version
+    )
+
+
 def encrypt_model_credential(account_id: int, api_key: str) -> EncryptedModelCredential:
     plaintext = _validate_model_credential_plaintext(api_key)
     kek, version = _model_credential_kek()
@@ -328,6 +349,23 @@ def encrypt_model_credential(account_id: int, api_key: str) -> EncryptedModelCre
         nonce,
         plaintext.encode("utf-8"),
         _model_credential_aad(account_id, version),
+    )
+    return EncryptedModelCredential(
+        ciphertext=_base64url_encode(ciphertext),
+        nonce=_base64url_encode(nonce),
+        key_hint=_model_credential_hint(plaintext),
+        version=version,
+    )
+
+
+def encrypt_vision_credential(account_id: int, api_key: str) -> EncryptedModelCredential:
+    plaintext = _validate_model_credential_plaintext(api_key)
+    kek, version = _model_credential_kek()
+    nonce = secrets.token_bytes(12)
+    ciphertext = AESGCM(kek).encrypt(
+        nonce,
+        plaintext.encode("utf-8"),
+        _model_credential_aad(account_id, version, _VISION_CREDENTIAL_PURPOSE),
     )
     return EncryptedModelCredential(
         ciphertext=_base64url_encode(ciphertext),
@@ -363,6 +401,64 @@ def decrypt_model_credential(account: UserAccount) -> str:
         raise
     except (binascii.Error, InvalidTag, UnicodeDecodeError, UnicodeEncodeError, ValueError) as exc:
         raise ModelCredentialDecryptionError("model credential authentication failed") from exc
+
+
+def decrypt_vision_credential(account: UserAccount) -> str:
+    if not vision_credential_configured(account):
+        raise ModelCredentialDecryptionError("vision credential is not configured")
+    try:
+        kek, configured_version = _model_credential_kek()
+        stored_version = int(account.vision_api_key_encryption_version)
+        if stored_version != configured_version:
+            raise ModelCredentialDecryptionError("vision credential KEK version mismatch")
+        nonce = _base64url_decode(str(account.vision_api_key_nonce))
+        ciphertext = _base64url_decode(str(account.vision_api_key_ciphertext))
+        if len(nonce) != 12 or len(ciphertext) < 16:
+            raise ModelCredentialDecryptionError("invalid vision credential envelope")
+        plaintext = AESGCM(kek).decrypt(
+            nonce,
+            ciphertext,
+            _model_credential_aad(account.id, stored_version, _VISION_CREDENTIAL_PURPOSE),
+        )
+        return _validate_model_credential_plaintext(plaintext.decode("utf-8"))
+    except ModelCredentialEncryptionUnavailable:
+        raise
+    except ModelCredentialFormatError:
+        raise
+    except ModelCredentialDecryptionError:
+        raise
+    except (binascii.Error, InvalidTag, UnicodeDecodeError, UnicodeEncodeError, ValueError) as exc:
+        raise ModelCredentialDecryptionError("vision credential authentication failed") from exc
+
+
+def account_model_provider_config(account: UserAccount) -> AccountModelProviderConfig:
+    """Resolve a configured account credential without retaining plaintext state."""
+    api_key = decrypt_model_credential(account)
+    base_url = str(account.provider_base_url or settings.llm_base_url or "").strip()
+    model = str(account.provider_model or settings.llm_model or "").strip()
+    if not base_url or not model:
+        raise ModelCredentialDecryptionError("model provider configuration is incomplete")
+    return AccountModelProviderConfig(api_key=api_key, base_url=base_url, model=model)
+
+
+def account_vision_provider_config(account: UserAccount) -> AccountModelProviderConfig:
+    """Resolve the account visual provider, falling back to its Tutor key."""
+    if vision_credential_configured(account):
+        base_url = str(
+            account.vision_provider_base_url or account.provider_base_url or settings.llm_base_url or ""
+        ).strip()
+        model = str(
+            account.vision_provider_model or account.provider_model or settings.llm_model or ""
+        ).strip()
+        api_key = decrypt_vision_credential(account)
+    else:
+        fallback = account_model_provider_config(account)
+        base_url = str(account.vision_provider_base_url or fallback.base_url or "").strip()
+        model = str(account.vision_provider_model or fallback.model or "").strip()
+        api_key = fallback.api_key
+    if not base_url or not model:
+        raise ModelCredentialDecryptionError("vision provider configuration is incomplete")
+    return AccountModelProviderConfig(api_key=api_key, base_url=base_url, model=model)
 
 
 def _csrf_token(session_token: str) -> str:

@@ -102,10 +102,10 @@ Tauri：`src-tauri/src/lib.rs`、`src-tauri/capabilities/default.json`、`Cargo.
 - all 的适配：token 格式/校验可完全照 `role_package_launch.py`；secret 进 Settings。**不建议**复用 `desktop_token`（形态不同：裸 uuid，非前缀 capability）。
 - 落地后必须保证**普通 bearer 不能访问 `/api/pet/*`**。
 
-### D3 — 视觉模型来源（推荐：对齐 all 后端 `.env VISION_*`）
-- LF：pet 视觉走**后端账户级**视觉 provider（`auth.account_vision_provider_config`，独立 key/加密 AAD）。
-- all：后端只有 `.env VISION_*`（Moonshot）与 `/settings/test-vision`；账户级加密凭证目前只在 vite/Node 层解析。
-- 迁移时建议把 `desktop_pet_vision.py` 的 provider 解析改为 all 的 `settings.vision_*`（服务端 .env 通道），与 all 现有一致，避免引入"后端账户级视觉凭证"这套 LF 独有设施；若产品要求账户级视觉 key，则需把账户凭证体系扩展进 all 后端——属较大范围，建议单独立项。
+### D3 — 视觉模型来源（已采用：账户级配置）
+- `LearnFlow-pet`：pet 视觉走**后端账户级**视觉 provider（`auth.account_vision_provider_config`，独立 key/加密 AAD）。
+- all：已补齐账户模型/视觉凭据字段、解密解析器与 `/auth/vision-credential` CRUD/测试接口。
+- 桌宠优先使用独立视觉配置；未设置独立 Key 时显式复用同一账户的 Tutor Key，桌宠 capability 不携带任一明文凭据。
 
 ### D4 — Tutor 受限回合（推荐：在 all 现有幂等之上加 `context_refs` + restricted 分支）
 - 在 `TutorTurnRequest` 增加 `context_refs: list[str] | None`（max 3），`api/agent.tutor_turn` 增加 `desktop_pet_restricted` 分支：强制 `client_turn_id`、禁 project/checkpoint/action/skill 覆盖、非 pet 来源的 context_refs 拒绝、回合成功后 `consume_desktop_pet_contexts`。
@@ -209,7 +209,7 @@ Tauri：capabilities(default.json) + lib.rs(窗口/托盘/命令) + Cargo/tauri.
 | --- | --- | --- | --- |
 | D1 | 迁移基线/波次 | 波次一 = LF `d8607a5` 已提交主链路；波次二 = 字幕/选区 OCR/dock 后置 | 几乎全部 Phase |
 | D2 | pet 鉴权形态 | 照 `role_package_launch` 模板新建 `lfpet_` capability | Phase 2 |
-| D3 | 视觉模型来源 | all 后端 `.env VISION_*`（不引入 LF 账户级视觉凭证） | Phase 2 |
+| D3 | 视觉模型来源 | 当前账户级视觉配置；未设置独立 Key 时复用 Tutor Key | Phase 2 |
 | D4 | tutor 受限回合 | 加 `context_refs` + restricted，回归红线：常规 turn 不变 | Phase 3 |
 | D5 | 窗口/OS 能力档位 | 档位 A 最小可用先做，档位 B 后置 | Phase 6/7 |
 | D6 | 前后端字幕常量 | 抽单一共享常量源，杜绝双份漂移 | 波次二 |
@@ -220,7 +220,7 @@ Tauri：capabilities(default.json) + lib.rs(窗口/托盘/命令) + Cargo/tauri.
 | --- | --- |
 | D1 | **A**：波次一先迁 LF `d8607a5` 主链路；波次二在途特性（字幕 source_ref / 选区 OCR 转录 / dock 动画）后置 |
 | D2 | **A**：照 `role_package_launch` 模板新建 `lfpet_` capability |
-| D3 | **A**：pet 视觉走 all 后端 `.env VISION_*` |
+| D3 | **B**：pet 视觉走当前账户级配置，支持复用 Tutor Key |
 | D4 | **A**：`context_refs` + restricted 受限回合 |
 | D5 | **档位 A + 全局快捷键**：最小 pet 窗先行，托盘/贴边后置；但 `Ctrl+Alt+P` 纳入波次一 → **选区抓取 + OCR/视觉转录这一小块从波次二提前**（字幕 source_ref 仍留波次二） |
 | D6 | **A**：抽单一共享常量源（波次二前做） |

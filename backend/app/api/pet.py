@@ -14,8 +14,13 @@ from app.db.database import get_db
 from app.models.learning import AgentSession, LearningTask, ReviewSchedule
 from app.services.auth import (
     CurrentLearner,
+    ModelCredentialDecryptionError,
+    ModelCredentialEncryptionUnavailable,
+    account_vision_provider_config,
     get_current_learner,
+    model_credential_configured,
     require_desktop_pet_capability,
+    vision_credential_configured,
 )
 from app.services.desktop_pet_context import (
     MAX_CONTEXT_CHARS,
@@ -28,10 +33,8 @@ from app.services.desktop_pet_context import (
 )
 from app.services.desktop_pet_vision import (
     MAX_IMAGE_BYTES,
-    desktop_pet_vision_configured,
     normalize_desktop_pet_image,
     observe_desktop_pet_image,
-    resolve_desktop_pet_vision_config,
     transcribe_desktop_pet_selection,
 )
 from app.services.file_formats import (
@@ -184,9 +187,10 @@ async def desktop_pet_bootstrap(
             "mastery_unchanged": True,
         },
         "model": {
-            "configured": desktop_pet_vision_configured(),
+            "configured": model_credential_configured(current.account) or vision_credential_configured(current.account),
             "status": (
-                "ready" if desktop_pet_vision_configured() else "unavailable"
+                "ready" if model_credential_configured(current.account) or vision_credential_configured(current.account)
+                else "unavailable"
             ),
         },
     }
@@ -291,7 +295,14 @@ async def create_image_context_package(
         image = normalize_desktop_pet_image(raw)
     finally:
         await file.close()
-    provider_config = resolve_desktop_pet_vision_config()
+    if not (model_credential_configured(current.account) or vision_credential_configured(current.account)):
+        raise HTTPException(409, "请先在 LearnFlow 主窗口配置支持图片理解的模型")
+    try:
+        provider_config = account_vision_provider_config(current.account)
+    except ModelCredentialEncryptionUnavailable:
+        raise HTTPException(503, "账户模型凭据当前不可用") from None
+    except ModelCredentialDecryptionError:
+        raise HTTPException(500, "账户模型凭据无法解密，请重新配置") from None
     observation = await observe_desktop_pet_image(
         image,
         provider_config=provider_config,
@@ -325,7 +336,14 @@ async def transcribe_selection_text(
         image = normalize_desktop_pet_image(raw)
     finally:
         await file.close()
-    provider_config = resolve_desktop_pet_vision_config()
+    if not (model_credential_configured(current.account) or vision_credential_configured(current.account)):
+        raise HTTPException(409, "请先在 LearnFlow 主窗口配置支持图片理解的模型")
+    try:
+        provider_config = account_vision_provider_config(current.account)
+    except ModelCredentialEncryptionUnavailable:
+        raise HTTPException(503, "账户模型凭据当前不可用") from None
+    except ModelCredentialDecryptionError:
+        raise HTTPException(500, "账户模型凭据无法解密，请重新配置") from None
     text = await transcribe_desktop_pet_selection(image, provider_config=provider_config)
     return {
         "text": text,

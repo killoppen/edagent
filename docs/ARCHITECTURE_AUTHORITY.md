@@ -1,5 +1,7 @@
 # LearnFlow 架构权威与维护边界
 
+Contract impact（`2026-09-03.2`）：桌宠图片视觉改为当前账户范围内的视觉模型解析。设置页可独立加密保存视觉 API Key、Base URL 与模型名，也可显式复用同一账户的 Tutor Key；独立视觉密钥使用不同 AAD 用途，桌宠 capability 不携带任何明文凭据。图片原始字节仍只在请求内存中存在，视觉输出仅是需确认、单回合消费的 `image_observation` 临时上下文，不写入 AgentMessage、EvidenceEvent、五核或长期记忆。
+
 Contract impact（`2026-09-03.1`）：已完成绑定的 `tauri://pet` 桌宠窗口正式发布为 Tutor 所有的桌面工作台。Windows 安装壳新增托盘、单实例唤醒和本机插件制品目录，仅管理窗口生命周期与受限桌面通信；其仍通过既有 `desktop_pet_gateway` 进入 Tutor/API，不能直接写核心学习对象、EvidenceEvent、五核或长期用户画像。该变更是对先前“待绑定”工作台的向后兼容发布，不改变任何 Agent、事件、评分或 reducer 合同。
 
 Contract impact（`2026-09-02.7`）：正式学习型任务的“进入个性化学习 / 回到学习现场”统一成为确定性运行交接：宿主先启动或恢复原 `LearningTask`，再按候选保存的 Conversation/Session/Project/Checkpoint 锚点打开原对话、切换到 `guided_learning`，并建立只镜像该正式任务的 `LearningTaskBinding`。启动 `LearningSkillRun` 时必须携带正式 `learning_task_id`；后端校验 learner 与完整 scope 后认领同一任务，禁止另建重复原子任务。该桥接不改变四阶段完成门、Practice 判定、EvidenceEvent 或五核语义，任务进入学习现场本身仍为零掌握证据。
