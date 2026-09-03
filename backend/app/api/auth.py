@@ -69,6 +69,7 @@ from app.services.auth import (
 from app.services.demo_seed import DEMO_USERNAME, demo_manifest
 from app.services.learning_runtime import ensure_kernel_states, record_event
 from app.services.profile import award_career_goal
+from app.services.provider_compat import create_chat_completion
 
 
 router = APIRouter(tags=["Authentication"])
@@ -535,33 +536,29 @@ async def test_vision_credential(
     except (ModelCredentialDecryptionError, ModelCredentialFormatError):
         raise HTTPException(500, "视觉模型凭据无法解密，请重新配置") from None
     try:
-        from openai import AsyncOpenAI
-
         started = time.perf_counter()
-        client = AsyncOpenAI(api_key=provider_config.api_key, base_url=provider_config.base_url)
-        try:
-            await client.chat.completions.create(
-                model=provider_config.model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "只回复 OK"},
-                        {"type": "image_url", "image_url": {"url": (
-                            "data:image/png;base64,"
-                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNk+M/wHwAF/gL+K5wqAAAAAElFTkSuQmCC"
-                        )}},
-                    ],
-                }],
-                max_tokens=16,
-                timeout=15,
-                **openai_chat_provider_kwargs(
-                    provider_config.base_url,
-                    provider_config.model,
-                    thinking_enabled=False,
-                ),
-            )
-        finally:
-            await client.close()
+        await create_chat_completion(
+            api_key=provider_config.api_key,
+            base_url=provider_config.base_url,
+            model=provider_config.model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "只回复 OK"},
+                    {"type": "image_url", "image_url": {"url": (
+                        "data:image/png;base64,"
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNk+M/wHwAF/gL+K5wqAAAAAElFTkSuQmCC"
+                    )}},
+                ],
+            }],
+            max_tokens=16,
+            timeout=15,
+            **openai_chat_provider_kwargs(
+                provider_config.base_url,
+                provider_config.model,
+                thinking_enabled=False,
+            ),
+        )
         latency_ms = round((time.perf_counter() - started) * 1000)
     except Exception as exc:
         status_code = getattr(exc, "status_code", None)
@@ -609,11 +606,10 @@ async def test_model_credential(
     if not model:
         raise HTTPException(422, "模型名称不能为空")
     try:
-        from openai import AsyncOpenAI
-
         started = time.perf_counter()
-        client = AsyncOpenAI(api_key=provider_config.api_key, base_url=base_url)
-        provider_response = await client.chat.completions.create(
+        provider_response = await create_chat_completion(
+            api_key=provider_config.api_key,
+            base_url=base_url,
             model=model,
             messages=[{"role": "user", "content": "只回复 OK"}],
             max_tokens=16,

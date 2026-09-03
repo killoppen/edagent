@@ -14,6 +14,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from app.core.config import openai_chat_provider_kwargs, settings
 from app.services.desktop_pet_context import MAX_CONTEXT_CHARS
 from app.services.auth import AccountModelProviderConfig
+from app.services.provider_compat import create_chat_completion
 
 
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
@@ -178,10 +179,11 @@ async def observe_desktop_pet_image(
     user_prompt = "请观察这张用户主动粘贴的截图。"
     if question:
         user_prompt += f"用户准备询问：{question}"
-    client = AsyncOpenAI(api_key=provider_config.api_key, base_url=provider_config.base_url)
     try:
         response = await asyncio.wait_for(
-            client.chat.completions.create(
+            create_chat_completion(
+                api_key=provider_config.api_key,
+                base_url=provider_config.base_url,
                 model=provider_config.model,
                 messages=[
                     {"role": "system", "content": VISION_SYSTEM_PROMPT},
@@ -200,6 +202,7 @@ async def observe_desktop_pet_image(
                     provider_config.model,
                     thinking_enabled=False,
                 ),
+                client_class=AsyncOpenAI,
             ),
             timeout=VISION_TIMEOUT_SECONDS,
         )
@@ -210,9 +213,6 @@ async def observe_desktop_pet_image(
         if status_code in {400, 404, 415, 422}:
             raise _image_error("当前账户模型不支持图片理解，请在设置中更换", 422) from None
         raise _image_error("视觉模型暂时不可用，请稍后重试", 502) from None
-    finally:
-        await client.close()
-
     choices = getattr(response, "choices", []) or []
     content = choices[0].message.content if choices else ""
     return _observation_from_response(str(content or ""))
@@ -223,10 +223,11 @@ async def transcribe_desktop_pet_selection(
     *,
     provider_config: PetVisionProviderConfig,
 ) -> str:
-    client = AsyncOpenAI(api_key=provider_config.api_key, base_url=provider_config.base_url)
     try:
         response = await asyncio.wait_for(
-            client.chat.completions.create(
+            create_chat_completion(
+                api_key=provider_config.api_key,
+                base_url=provider_config.base_url,
                 model=provider_config.model,
                 messages=[
                     {"role": "system", "content": SELECTION_TRANSCRIPTION_SYSTEM_PROMPT},
@@ -245,6 +246,7 @@ async def transcribe_desktop_pet_selection(
                     provider_config.model,
                     thinking_enabled=False,
                 ),
+                client_class=AsyncOpenAI,
             ),
             timeout=VISION_TIMEOUT_SECONDS,
         )
@@ -255,9 +257,6 @@ async def transcribe_desktop_pet_selection(
         if status_code in {400, 404, 415, 422}:
             raise _image_error("当前账户模型不支持图片理解，请在设置中更换", 422) from None
         raise _image_error("选区文字识别暂时不可用，请稍后重试", 502) from None
-    finally:
-        await client.close()
-
     choices = getattr(response, "choices", []) or []
     content = choices[0].message.content if choices else ""
     text = _selection_text_from_response(str(content or ""))
