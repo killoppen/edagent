@@ -43,6 +43,7 @@ type DesktopPetSelectionCapture = {
   imageBase64: string
   mimeType: string
   sourceLabel: string
+  text?: string | null
 }
 
 type DesktopPetPreferences = {
@@ -270,21 +271,32 @@ export default function DesktopPet() {
   }, [])
 
   const captureDesktopSelection = async () => {
-    if (!session || compactView || pending || busyKey) return
+    if (!session || pending || busyKey) return
     setBusyKey('context:selection')
-    setStatus('正在读取高亮文字…')
+    setStatus('正在读取当前选中文字…')
     try {
       const { invoke } = await import('@tauri-apps/api/core')
       const capture = await invoke<DesktopPetSelectionCapture>('capture_desktop_pet_selection')
+      const nativeText = capture.text?.trim()
+      if (nativeText) {
+        if (compactView) setPetView(false)
+        selectionTextStore.current = nativeText
+        setSelectionText(nativeText)
+        setSelectionEditorOpen(false)
+        setStatus(`已从当前窗口直接读取 ${nativeText.length} 个字符，点击提示可编辑。`)
+        return
+      }
       if (!capture.imageBase64) throw new Error('前台窗口抓取结果为空。')
+      setStatus('正在识别当前窗口中的选中文字…')
       const file = base64File(capture.imageBase64, capture.mimeType || 'image/png', 'desktop-selection.png')
       const result = await transcribeFormalDesktopPetSelection(file)
       const text = result.text.trim()
       if (!text) throw new Error('未识别到系统高亮文字。')
+      if (compactView) setPetView(false)
       selectionTextStore.current = text
       setSelectionText(text)
       setSelectionEditorOpen(false)
-      setStatus(`已获取 ${text.length} 个字符，点击提示可编辑。`)
+      setStatus(`视觉识别到 ${text.length} 个字符，点击提示可编辑。若内容不完整，请确认原应用允许复制。`)
     } catch (error) {
       setStatus(displayError(error))
     } finally {
@@ -503,28 +515,6 @@ export default function DesktopPet() {
       setContexts(previous => [...previous, created])
       setDraft('')
       setStatus('')
-    } catch (error) {
-      setStatus(displayError(error))
-    } finally {
-      setBusyKey('')
-    }
-  }
-
-  const captureScreenshotOcr = async () => {
-    if (!session) return
-    setBusyKey('context:ocr')
-    try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      const result = await invoke<{ text: string; sourceLabel: string } | null>('capture_desktop_pet_ocr')
-      if (!result?.text.trim()) return
-      const created = await createFormalDesktopPetContext({
-        kind: 'ocr_text',
-        content: result.text,
-        sourceLabel: result.sourceLabel,
-        capturedAt: new Date().toISOString(),
-      })
-      setContexts(previous => [...previous, created])
-      setStatus('已识别截图文字，请确认后才会作为本次 Tutor 回合的参考。')
     } catch (error) {
       setStatus(displayError(error))
     } finally {
@@ -850,7 +840,9 @@ export default function DesktopPet() {
         ? '正在陪你学习'
         : petVisualState === 'error'
           ? '点我查看状态'
-          : '点我聊聊'
+          : session
+            ? `选中文字后按 ${preferences?.shortcut || 'Ctrl+Alt+P'}`
+            : '点我聊聊'
 
   if (compactView) return <main className={`${styles.pet} ${styles.compactPet}`} data-appearance={preferences?.appearance || 'mist'}>
     <header className={styles.compactHeader} data-tauri-drag-region onPointerDown={startWindowDrag}>
@@ -969,7 +961,6 @@ export default function DesktopPet() {
             <button type="button" disabled={!session || pending || busyKey === 'context:image'} onClick={() => imageInput.current?.click()}>添加图片</button>
             <button type="button" disabled={!session || pending || busyKey === 'context:document'} onClick={() => documentInput.current?.click()}>选择文档</button>
             <button type="button" disabled={!session || pending || busyKey === 'context:subtitle'} onClick={() => subtitleInput.current?.click()}>选择字幕</button>
-            <button type="button" disabled={!session || pending || busyKey === 'context:ocr'} onClick={() => void captureScreenshotOcr()}>截图文字 OCR</button>
             <button type="button" disabled={!draft.trim() || !session || pending || busyKey === 'context:create'} onClick={() => void createContext()}>将文字作为参考</button>
           </div>
         </details>

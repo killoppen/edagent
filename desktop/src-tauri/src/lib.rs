@@ -15,7 +15,7 @@ use windows_sys::Win32::Foundation::{
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, SetEvent, WaitForMultipleObjects, INFINITE,
+    CreateEventW, GetCurrentProcessId, SetEvent, WaitForMultipleObjects, INFINITE,
 };
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
@@ -24,7 +24,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_P,
 };
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{PeekMessageW, MSG, PM_REMOVE, WM_HOTKEY};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindowThreadProcessId, IsWindow, PeekMessageW, MSG, PM_REMOVE,
+    WM_HOTKEY,
+};
 
 const PET_TRAY_TOGGLE_ID: &str = "desktop-pet-toggle";
 const PET_TRAY_OPEN_MAIN_ID: &str = "desktop-pet-open-main";
@@ -132,6 +135,7 @@ struct DesktopPetSelectionCapture {
     image_base64: String,
     mime_type: String,
     source_label: String,
+    text: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -148,6 +152,10 @@ struct DesktopRuntimeState {
     pet_session_id: Mutex<Option<u64>>,
     pet_preferences: Mutex<DesktopPetPreferences>,
     pet_preferences_path: PathBuf,
+    #[cfg(target_os = "windows")]
+    pending_selection_window: Mutex<Option<isize>>,
+    #[cfg(target_os = "windows")]
+    last_external_foreground_window: Mutex<Option<isize>>,
 }
 
 #[tauri::command]
@@ -234,7 +242,7 @@ fn bounded_ocr_text(raw: String) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn run_windows_foreground_capture() -> Result<String, String> {
+fn run_windows_foreground_capture(target_window: Option<isize>) -> Result<String, String> {
     const CAPTURE_SCRIPT: &str = r#"
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -248,7 +256,12 @@ public static class LearnFlowForegroundCapture {
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 }
 "@
-$hwnd = [LearnFlowForegroundCapture]::GetForegroundWindow()
+$hwnd = [IntPtr]::Zero
+if (-not [string]::IsNullOrWhiteSpace($env:LEARNFLOW_TARGET_HWND)) {
+    $hwnd = [IntPtr]::new([Int64]$env:LEARNFLOW_TARGET_HWND)
+} else {
+    $hwnd = [LearnFlowForegroundCapture]::GetForegroundWindow()
+}
 if ($hwnd -eq [IntPtr]::Zero) { throw '没有可抓取的前台窗口。' }
 $rect = New-Object LearnFlowForegroundCapture+RECT
 if (-not [LearnFlowForegroundCapture]::GetWindowRect($hwnd, [ref]$rect)) { throw '无法读取前台窗口范围。' }
@@ -271,6 +284,10 @@ try {
 "#;
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", CAPTURE_SCRIPT])
+        .env(
+            "LEARNFLOW_TARGET_HWND",
+            target_window.map(|value| value.to_string()).unwrap_or_default(),
+        )
         .output()
         .map_err(|error| format!("无法启动桌面抓取：{error}"))?;
     if !output.status.success() {
@@ -289,8 +306,96 @@ try {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn run_windows_foreground_capture() -> Result<String, String> {
+fn run_windows_foreground_capture(_target_window: Option<isize>) -> Result<String, String> {
     Err("当前系统未提供前台窗口抓取".into())
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_selection_text(target_window: Option<isize>) -> Result<Option<String>, String> {
+    const SELECTION_SCRIPT: &str = r#"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class LearnFlowSelectionCapture {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
+}
+"@
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$target = [IntPtr]::Zero
+if (-not [string]::IsNullOrWhiteSpace($env:LEARNFLOW_TARGET_HWND)) {
+    $target = [IntPtr]::new([Int64]$env:LEARNFLOW_TARGET_HWND)
+}
+if ($target -eq [IntPtr]::Zero) {
+    $target = [LearnFlowSelectionCapture]::GetForegroundWindow()
+}
+$previous = $null
+try { $previous = [System.Windows.Forms.Clipboard]::GetDataObject() } catch {}
+$beforeSequence = [LearnFlowSelectionCapture]::GetClipboardSequenceNumber()
+$beforeText = $null
+try {
+    if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+        $beforeText = [System.Windows.Forms.Clipboard]::GetText()
+    }
+} catch {}
+try {
+    if ($target -ne [IntPtr]::Zero) {
+        [LearnFlowSelectionCapture]::SetForegroundWindow($target) | Out-Null
+    }
+    Start-Sleep -Milliseconds 80
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        try {
+            [System.Windows.Forms.SendKeys]::SendWait('^c')
+            Start-Sleep -Milliseconds 180
+            $afterSequence = [LearnFlowSelectionCapture]::GetClipboardSequenceNumber()
+            if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+                $afterText = [System.Windows.Forms.Clipboard]::GetText()
+                $changed = $afterSequence -ne $beforeSequence -or $null -eq $beforeText -or $afterText -ne $beforeText
+                if ($changed -and -not [string]::IsNullOrWhiteSpace($afterText)) {
+                    [Console]::Out.Write($afterText)
+                    break
+                }
+            }
+        } catch {}
+    }
+} finally {
+    try {
+        if ($null -ne $previous) {
+            [System.Windows.Forms.Clipboard]::SetDataObject($previous, $true)
+        } else {
+            [System.Windows.Forms.Clipboard]::Clear()
+        }
+    } catch {}
+}
+"#;
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            SELECTION_SCRIPT,
+        ])
+        .env(
+            "LEARNFLOW_TARGET_HWND",
+            target_window.map(|value| value.to_string()).unwrap_or_default(),
+        )
+        .output()
+        .map_err(|error| format!("无法启动系统选区读取：{error}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = bounded_ocr_text(String::from_utf8_lossy(&output.stdout).into_owned());
+    Ok((!text.is_empty()).then_some(text))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_windows_selection_text(_target_window: Option<isize>) -> Result<Option<String>, String> {
+    Ok(None)
 }
 
 #[cfg(target_os = "windows")]
@@ -393,6 +498,7 @@ async fn capture_desktop_pet_ocr(
 #[tauri::command]
 async fn capture_desktop_pet_selection(
     window: WebviewWindow,
+    state: tauri::State<'_, DesktopRuntimeState>,
 ) -> Result<DesktopPetSelectionCapture, String> {
     if window.label() != "pet" {
         return Err("只有桌宠可以抓取前台选区".into());
@@ -400,13 +506,38 @@ async fn capture_desktop_pet_selection(
     if !window.is_visible().map_err(|error| error.to_string())? {
         return Err("桌宠对话框未打开".into());
     }
-    let image_base64 = tauri::async_runtime::spawn_blocking(run_windows_foreground_capture)
+    #[cfg(target_os = "windows")]
+    let target_window = state
+        .pending_selection_window
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.take());
+    #[cfg(not(target_os = "windows"))]
+    let target_window = None;
+    let native_text = tauri::async_runtime::spawn_blocking(move || {
+        run_windows_selection_text(target_window)
+    })
+    .await
+    .map_err(|error| format!("系统选区读取任务中断：{error}"))?
+    .unwrap_or(None);
+    if let Some(text) = native_text {
+        return Ok(DesktopPetSelectionCapture {
+            image_base64: String::new(),
+            mime_type: "text/plain".into(),
+            source_label: "用户主动读取的系统选区文字".into(),
+            text: Some(text),
+        });
+    }
+    let image_base64 = tauri::async_runtime::spawn_blocking(move || {
+        run_windows_foreground_capture(target_window)
+    })
         .await
         .map_err(|error| format!("桌面抓取任务中断：{error}"))??;
     Ok(DesktopPetSelectionCapture {
         image_base64,
         mime_type: "image/png".into(),
         source_label: "用户主动抓取的系统高亮文字".into(),
+        text: None,
     })
 }
 
@@ -821,6 +952,26 @@ fn handle_desktop_pet_global_shortcut(app: &tauri::AppHandle) {
         .and_then(|window| window.is_visible().ok())
         .unwrap_or(false);
     if pet_visible {
+        let foreground_window = unsafe { GetForegroundWindow() };
+        let process_id = unsafe { GetCurrentProcessId() };
+        let mut foreground_process_id = 0;
+        let external_window = if !foreground_window.is_null()
+            && unsafe { GetWindowThreadProcessId(foreground_window, &mut foreground_process_id) } != 0
+            && foreground_process_id != process_id
+        {
+            Some(foreground_window as isize)
+        } else {
+            app.state::<DesktopRuntimeState>()
+                .last_external_foreground_window
+                .lock()
+                .ok()
+                .and_then(|window| window.filter(|value| unsafe { IsWindow(*value as _) } != 0))
+        };
+        if let Some(external_window) = external_window {
+            if let Ok(mut pending) = app.state::<DesktopRuntimeState>().pending_selection_window.lock() {
+                *pending = Some(external_window);
+            }
+        }
         let _ = request_desktop_pet_selection_capture(app);
     } else {
         let _ = request_desktop_pet(app);
@@ -860,6 +1011,21 @@ fn start_pet_global_shortcut_listener(app: tauri::AppHandle) {
                 while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
                     if message.message == WM_HOTKEY && message.wParam == PET_GLOBAL_SHORTCUT_ID as usize {
                         handle_desktop_pet_global_shortcut(&app);
+                    }
+                }
+                let foreground_window = GetForegroundWindow();
+                if !foreground_window.is_null() {
+                    let mut foreground_process_id = 0;
+                    if GetWindowThreadProcessId(foreground_window, &mut foreground_process_id) != 0
+                        && foreground_process_id != GetCurrentProcessId()
+                    {
+                        if let Ok(mut last_external) = app
+                            .state::<DesktopRuntimeState>()
+                            .last_external_foreground_window
+                            .lock()
+                        {
+                            *last_external = Some(foreground_window as isize);
+                        }
                     }
                 }
                 thread::sleep(std::time::Duration::from_millis(120));
@@ -960,6 +1126,10 @@ pub fn run() {
                 pet_session_id: Mutex::new(None),
                 pet_preferences: Mutex::new(pet_preferences),
                 pet_preferences_path,
+                #[cfg(target_os = "windows")]
+                pending_selection_window: Mutex::new(None),
+                #[cfg(target_os = "windows")]
+                last_external_foreground_window: Mutex::new(None),
             });
             Ok(())
         })

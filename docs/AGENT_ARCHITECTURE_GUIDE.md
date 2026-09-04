@@ -1,5 +1,7 @@
 # LearnFlow 智能体架构与协作指南
 
+Contract impact（`2026-09-03.3`）：桌宠选中文本入口仍由 `tutor_agent` 的 `desktop_pet_gateway` 所有。Windows 快捷键触发时先固定原前台窗口，优先本机读取用户主动选中的 Unicode 文本并恢复剪贴板；不可复制时才回退到原有前台截图和账户视觉模型。两条路径都只产生可编辑、TTL 限时的临时上下文，须用户发送后才消费一个正式 Tutor 回合，不写 AgentMessage 正文、EvidenceEvent、五核或长期记忆；快捷键、capability、API 和视觉回退保持向后兼容。
+
 Contract impact（`2026-09-03.2`）：桌宠视觉适配器使用当前账户的视觉模型配置：可独立保存加密视觉凭据，或显式回退同一账户的 Tutor 凭据；Base URL 与模型名称按账户保存。两类密钥使用不同 AAD 用途，桌宠 capability 不能读取凭据。截图仍须用户主动提供、确认并只随一个正式 Tutor 回合消费，视觉观察不构成掌握、评分、策略或五核证据。
 
 Contract impact（`2026-09-02.7`）：从学习任务队列或确认卡进入正式任务时，前端不再只打开来源页面，而是启动/恢复该 `LearningTask`、恢复原 Conversation/Session scope、切换到 `guided_learning` 并创建浏览器 `LearningTaskBinding`。随后首个正式 SkillRun 请求携带 `learning_task_id`，运行时验证 learner/project/checkpoint/session 后把 SkillRun 绑定到同一任务；重复请求重放现有运行，不生成第二条原子任务。该变化只补齐 Tutor 主状态到正式 SkillRun 的既有包含关系，不新增状态机、Agent、事件或掌握写入。
