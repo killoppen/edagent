@@ -377,7 +377,7 @@ async def index_embeddings(
     """Batch index all chunks for a project via DeepSeek API."""
     await require_owned_project(db, current.learner.id, project_id)
     from app.models.project import Chunk, Source
-    from app.services.embedding import embed_batch, cache_embedding
+    from app.services.embedding import embed_batch, cache_embeddings
 
     result = await db.execute(
         select(Chunk).join(Source).where(Source.project_id == project_id).order_by(Chunk.id)
@@ -395,13 +395,20 @@ async def index_embeddings(
         batch = chunks[i:i + batch_size]
         try:
             texts = [c.content[:2000] for c in batch]
-            embeddings = embed_batch(texts)
-            for j, c in enumerate(batch):
-                cache_embedding(c.id, embeddings[j])
+            embeddings = await embed_batch(texts)
+            # One read/write per batch, not per chunk: the cache is a single
+            # whole-file JSON document shared by every request.
+            cache_embeddings({c.id: embeddings[j] for j, c in enumerate(batch)})
             indexed += len(batch)
         except Exception as e:
             errors += 1
-            print(f"[Embedding] Batch {i//batch_size} failed: {e}")
+            # A provider error can quote the submitted chunk text and a base
+            # URL carrying userinfo; neither belongs in the log verbatim.
+            from app.services.embedding import redact_credentials
+            print(
+                f"[Embedding] Batch {i//batch_size} failed: "
+                f"{type(e).__name__}: {redact_credentials(e)[:150]}"
+            )
             continue
 
     return {"status": "ok", "indexed": indexed, "errors": errors, "total": total}

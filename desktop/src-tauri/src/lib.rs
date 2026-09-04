@@ -1094,6 +1094,11 @@ pub fn run() {
             let settings_path = app_data_dir.join("settings.env");
             let plugin_artifact_dir = app_data_dir.join("plugin-artifacts");
             std::fs::create_dir_all(&plugin_artifact_dir)?;
+            // The sidecar is a frozen onefile bundle whose extraction directory
+            // is removed on exit, so the embedding cache has to live in
+            // application data or every launch would re-index from scratch.
+            let embedding_cache_dir = app_data_dir.join("embeddings");
+            std::fs::create_dir_all(&embedding_cache_dir)?;
             let pet_preferences_path = app_data_dir.join("desktop-pet-settings.json");
             let pet_preferences = load_desktop_pet_preferences(&pet_preferences_path);
             let command = app
@@ -1108,6 +1113,7 @@ pub fn run() {
                 .env("SOURCE_UPLOADS_DIR", source_uploads_dir.to_string_lossy().as_ref())
                 .env("LEARNFLOW_SETTINGS_PATH", settings_path.to_string_lossy().as_ref())
                 .env("PLUGIN_ARTIFACT_DIR", plugin_artifact_dir.to_string_lossy().as_ref())
+                .env("EMBEDDING_CACHE_DIR", embedding_cache_dir.to_string_lossy().as_ref())
                 // A learner-visible memory graph must continuously consume
                 // eligible Fact batches into versioned Module/Claim nodes.
                 .env("MEMORY_AUTO_SYNTHESIS_ENABLED", "true")
