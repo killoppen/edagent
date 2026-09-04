@@ -94,6 +94,11 @@ class AuthenticatedAccountResponse(BaseModel):
     dev_test_login_enabled: bool
     is_dev_login: bool
     desktop_auth_token: str | None = None
+    desktop_pet_capability_token: str | None = None
+
+
+class DesktopPetCapabilityRefreshResponse(BaseModel):
+    desktop_pet_capability_token: str
 
 
 class LogoutResponse(BaseModel):
@@ -118,12 +123,34 @@ class ModelCredentialUpdateRequest(BaseModel):
     # Empty/whitespace means "keep the current encrypted key". Deletion is an
     # explicit DELETE so masked form submissions cannot erase a credential.
     api_key: str = Field(default="", max_length=4096)
+    base_url: str = Field(default="", max_length=2048)
+    model: str = Field(default="", max_length=200)
 
 
 class ModelCredentialMetadata(BaseModel):
     configured: bool
     key_hint: str = ""
     updated_at: datetime | None = None
+    base_url: str = ""
+    model: str = ""
+
+
+class VisionCredentialUpdateRequest(BaseModel):
+    # Empty keys retain a dedicated vision credential. Explicit tutor-key
+    # reuse clears only that dedicated envelope.
+    api_key: str = Field(default="", max_length=4096)
+    base_url: str = Field(default="", max_length=2048)
+    model: str = Field(default="", max_length=200)
+    use_tutor_key: bool = False
+
+
+class VisionCredentialMetadata(BaseModel):
+    configured: bool
+    uses_tutor_key: bool
+    key_hint: str = ""
+    updated_at: datetime | None = None
+    base_url: str = ""
+    model: str = ""
 
 
 class ModelCredentialTestRequest(BaseModel):
@@ -141,6 +168,8 @@ class ModelCredentialResolveResponse(BaseModel):
     api_key: str
     key_hint: str
     version: int
+    base_url: str = ""
+    model: str = ""
 
 
 class AdminAccountProjection(BaseModel):

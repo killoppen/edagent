@@ -42,6 +42,10 @@ from app.services.learning_skill_runtime import (
 )
 from app.core.config import settings
 from app.services.role_package_launch import RolePackageLaunchError, verify_role_package_launch
+from app.services.desktop_pet_context import (
+    consume_desktop_pet_contexts,
+    load_confirmed_desktop_pet_contexts,
+)
 from app.services.project_proposals import (
     list_session_proposals, proposal_view, set_proposal_status,
     start_resource_search, update_project_proposal,
@@ -809,6 +813,33 @@ async def tutor_turn(
     current: CurrentLearner = Depends(get_current_learner),
 ):
     session = await _owned_session(db, current.learner.id, session_id)
+    desktop_pet_restricted = current.auth_method == "desktop_pet_capability"
+    if desktop_pet_restricted:
+        if not data.client_turn_id:
+            raise HTTPException(422, "桌宠消息必须提供 client_turn_id")
+        if any(value is not None for value in (
+            data.project_id, data.checkpoint_id, data.selected_action_id,
+            data.selected_skill_id, data.prepared_skill_turn_id,
+        )):
+            raise HTTPException(403, "桌宠不能在发送时修改会话范围或执行会话动作")
+    elif data.context_refs:
+        raise HTTPException(403, "临时上下文引用仅允许由桌宠受限身份发送")
+    # Allowed until an owned row proves this client_turn_id was already sent;
+    # otherwise a replayed idempotent retry would reload consumed references.
+    existing_turn = None
+    if data.client_turn_id:
+        existing_turn = (await db.execute(select(AgentMessage).where(
+            AgentMessage.session_id == session.id,
+            AgentMessage.idempotency_key == f"{session.id}:{data.client_turn_id}",
+        ))).scalar_one_or_none()
+    ephemeral_context = []
+    if desktop_pet_restricted and data.context_refs and existing_turn is None:
+        ephemeral_context = await load_confirmed_desktop_pet_contexts(
+            db,
+            learner_id=current.learner.id,
+            session_id=session.id,
+            context_refs=data.context_refs,
+        )
     pending = await db.get(AgentAction, session.pending_action_id) if session.pending_action_id else None
     if (
         pending and pending.capability == "delegate_local_agent_task"
@@ -826,7 +857,7 @@ async def tutor_turn(
     if data.checkpoint_id is not None:
         await require_owned_checkpoint(db, current.learner.id, data.checkpoint_id)
     try:
-        return await process_turn(
+        response = await process_turn(
             db, session,
             message=data.message,
             project_id=data.project_id,
@@ -836,7 +867,17 @@ async def tutor_turn(
             client_turn_id=data.client_turn_id,
             prepared_skill_turn_id=data.prepared_skill_turn_id,
             context=data.context,
+            ephemeral_context=ephemeral_context,
+            desktop_pet_restricted=desktop_pet_restricted,
         )
+        if ephemeral_context:
+            await consume_desktop_pet_contexts(
+                db,
+                packages=ephemeral_context,
+                client_turn_id=data.client_turn_id or "",
+            )
+            await db.commit()
+        return response
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:

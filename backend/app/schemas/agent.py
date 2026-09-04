@@ -61,6 +61,7 @@ class TutorTurnRequest(BaseModel):
     client_turn_id: Optional[str] = Field(default=None, min_length=3, max_length=160)
     prepared_skill_turn_id: Optional[int] = Field(default=None, ge=1)
     context: dict[str, Any] = Field(default_factory=dict)
+    context_refs: list[str] = Field(default_factory=list, max_length=3)
 
 
 class VisualPlannerRequest(BaseModel):

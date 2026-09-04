@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import ipaddress
 import math
+import re
 import secrets
 import threading
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.database import async_session, get_db
 from app.models.learning import (
-    AuthLoginAttempt, AuthSession, Learner, LearnerProfile, UserAccount,
+    AuthLoginAttempt, AuthSession, DesktopPetCapability, Learner, LearnerProfile, UserAccount,
 )
 from app.models.project import (
     ArtifactAnnotation, Checkpoint, Exercise, LectureNote, ProcessAnimation, Project, Roadmap,
@@ -42,6 +43,22 @@ class CurrentLearner:
     is_dev_login: bool = False
     session_id: int | None = None
     auth_method: str = "internal"
+    pet_capability_scopes: tuple[str, ...] = ()
+    pet_capability_expires_at: datetime | None = None
+
+
+DESKTOP_PET_CAPABILITY_SCOPES = (
+    "pet.bootstrap.read",
+    "pet.session.read",
+    "pet.tutor.turn",
+    "pet.task.read",
+    "pet.task.control",
+    "pet.skill.control",
+    "pet.review.read",
+    "pet.file.read",
+    "pet.context.write",
+)
+DESKTOP_PET_CAPABILITY_TTL_SECONDS = 10 * 60
 
 
 @dataclass(frozen=True)
@@ -75,6 +92,13 @@ class EncryptedModelCredential:
     version: int
 
 
+@dataclass(frozen=True)
+class AccountModelProviderConfig:
+    api_key: str
+    base_url: str
+    model: str
+
+
 INVALID_LOGIN_DETAIL = "用户名或密码错误"
 LOGIN_BACKOFF_DETAIL = "登录暂不可用，请稍后重试"
 CSRF_HEADER_NAME = "x-csrf-token"
@@ -83,6 +107,7 @@ _CSRF_CONTEXT = b"learnflow.session.csrf.v1"
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _KDF_LIMITER = threading.BoundedSemaphore(max(1, settings.auth_kdf_max_concurrency))
 _MODEL_CREDENTIAL_PURPOSE = "model-provider-api-key"
+_VISION_CREDENTIAL_PURPOSE = "vision-provider-api-key"
 _RUNTIME_BRIDGE_PATH = "/api/auth/model-credential/internal/resolve"
 _RUNTIME_BRIDGE_SENTINEL = "learnflow-runtime-bridge-unconfigured-sentinel"
 _NO_STORE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
@@ -267,10 +292,14 @@ def _model_credential_kek() -> tuple[bytes, int]:
     return key, version
 
 
-def _model_credential_aad(account_id: int, version: int) -> bytes:
+def _model_credential_aad(
+    account_id: int,
+    version: int,
+    purpose: str = _MODEL_CREDENTIAL_PURPOSE,
+) -> bytes:
     return (
         "learnflow|purpose="
-        f"{_MODEL_CREDENTIAL_PURPOSE}|account_id={int(account_id)}|version={int(version)}"
+        f"{purpose}|account_id={int(account_id)}|version={int(version)}"
     ).encode("utf-8")
 
 
@@ -303,6 +332,15 @@ def model_credential_configured(account: UserAccount) -> bool:
     )
 
 
+def vision_credential_configured(account: UserAccount) -> bool:
+    return bool(
+        account.vision_api_key_ciphertext
+        and account.vision_api_key_nonce
+        and account.vision_api_key_hint
+        and account.vision_api_key_encryption_version
+    )
+
+
 def encrypt_model_credential(account_id: int, api_key: str) -> EncryptedModelCredential:
     plaintext = _validate_model_credential_plaintext(api_key)
     kek, version = _model_credential_kek()
@@ -311,6 +349,23 @@ def encrypt_model_credential(account_id: int, api_key: str) -> EncryptedModelCre
         nonce,
         plaintext.encode("utf-8"),
         _model_credential_aad(account_id, version),
+    )
+    return EncryptedModelCredential(
+        ciphertext=_base64url_encode(ciphertext),
+        nonce=_base64url_encode(nonce),
+        key_hint=_model_credential_hint(plaintext),
+        version=version,
+    )
+
+
+def encrypt_vision_credential(account_id: int, api_key: str) -> EncryptedModelCredential:
+    plaintext = _validate_model_credential_plaintext(api_key)
+    kek, version = _model_credential_kek()
+    nonce = secrets.token_bytes(12)
+    ciphertext = AESGCM(kek).encrypt(
+        nonce,
+        plaintext.encode("utf-8"),
+        _model_credential_aad(account_id, version, _VISION_CREDENTIAL_PURPOSE),
     )
     return EncryptedModelCredential(
         ciphertext=_base64url_encode(ciphertext),
@@ -348,6 +403,64 @@ def decrypt_model_credential(account: UserAccount) -> str:
         raise ModelCredentialDecryptionError("model credential authentication failed") from exc
 
 
+def decrypt_vision_credential(account: UserAccount) -> str:
+    if not vision_credential_configured(account):
+        raise ModelCredentialDecryptionError("vision credential is not configured")
+    try:
+        kek, configured_version = _model_credential_kek()
+        stored_version = int(account.vision_api_key_encryption_version)
+        if stored_version != configured_version:
+            raise ModelCredentialDecryptionError("vision credential KEK version mismatch")
+        nonce = _base64url_decode(str(account.vision_api_key_nonce))
+        ciphertext = _base64url_decode(str(account.vision_api_key_ciphertext))
+        if len(nonce) != 12 or len(ciphertext) < 16:
+            raise ModelCredentialDecryptionError("invalid vision credential envelope")
+        plaintext = AESGCM(kek).decrypt(
+            nonce,
+            ciphertext,
+            _model_credential_aad(account.id, stored_version, _VISION_CREDENTIAL_PURPOSE),
+        )
+        return _validate_model_credential_plaintext(plaintext.decode("utf-8"))
+    except ModelCredentialEncryptionUnavailable:
+        raise
+    except ModelCredentialFormatError:
+        raise
+    except ModelCredentialDecryptionError:
+        raise
+    except (binascii.Error, InvalidTag, UnicodeDecodeError, UnicodeEncodeError, ValueError) as exc:
+        raise ModelCredentialDecryptionError("vision credential authentication failed") from exc
+
+
+def account_model_provider_config(account: UserAccount) -> AccountModelProviderConfig:
+    """Resolve a configured account credential without retaining plaintext state."""
+    api_key = decrypt_model_credential(account)
+    base_url = str(account.provider_base_url or settings.llm_base_url or "").strip()
+    model = str(account.provider_model or settings.llm_model or "").strip()
+    if not base_url or not model:
+        raise ModelCredentialDecryptionError("model provider configuration is incomplete")
+    return AccountModelProviderConfig(api_key=api_key, base_url=base_url, model=model)
+
+
+def account_vision_provider_config(account: UserAccount) -> AccountModelProviderConfig:
+    """Resolve the account visual provider, falling back to its Tutor key."""
+    if vision_credential_configured(account):
+        base_url = str(
+            account.vision_provider_base_url or account.provider_base_url or settings.llm_base_url or ""
+        ).strip()
+        model = str(
+            account.vision_provider_model or account.provider_model or settings.llm_model or ""
+        ).strip()
+        api_key = decrypt_vision_credential(account)
+    else:
+        fallback = account_model_provider_config(account)
+        base_url = str(account.vision_provider_base_url or fallback.base_url or "").strip()
+        model = str(account.vision_provider_model or fallback.model or "").strip()
+        api_key = fallback.api_key
+    if not base_url or not model:
+        raise ModelCredentialDecryptionError("vision provider configuration is incomplete")
+    return AccountModelProviderConfig(api_key=api_key, base_url=base_url, model=model)
+
+
 def _csrf_token(session_token: str) -> str:
     digest = hmac.new(session_token.encode("utf-8"), _CSRF_CONTEXT, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
@@ -377,6 +490,68 @@ async def create_auth_session(
     account.last_login_at = now
     await db.flush()
     return token
+
+
+async def issue_desktop_pet_capability(
+    db: AsyncSession,
+    *,
+    current: CurrentLearner,
+    auth_token: str | None = None,
+    auth_session_id: int | None = None,
+) -> str:
+    """Issue a capability that the pet can use without receiving a full bearer.
+
+    The capability is opaque and database-backed so logout, account epoch
+    changes and expiry are all checked server-side.  It is intentionally scoped
+    to a small set of read/continue operations rather than general API access.
+    """
+    if (auth_token is None) == (auth_session_id is None):
+        raise ValueError("必须提供且仅提供一个桌面认证会话标识")
+    now = datetime.utcnow()
+    session_filter = (
+        AuthSession.token_hash == _token_hash(auth_token)
+        if auth_token is not None
+        else AuthSession.id == auth_session_id
+    )
+    auth_session = (await db.execute(select(AuthSession).where(
+        session_filter,
+        AuthSession.user_id == current.account.id,
+        AuthSession.revoked_at.is_(None),
+        AuthSession.auth_epoch == current.account.auth_epoch,
+        AuthSession.expires_at > now,
+        AuthSession.absolute_expires_at > now,
+        AuthSession.idle_expires_at > now,
+    ))).scalar_one_or_none()
+    if not auth_session:
+        raise RuntimeError("桌面认证会话已失效")
+    await db.execute(
+        delete(DesktopPetCapability).where(
+            DesktopPetCapability.auth_session_id == auth_session.id,
+            DesktopPetCapability.revoked_at.is_(None),
+        )
+    )
+    capability = secrets.token_urlsafe(32)
+    db.add(DesktopPetCapability(
+        auth_session_id=auth_session.id,
+        user_id=current.account.id,
+        learner_id=current.learner.id,
+        token_hash=_token_hash(capability),
+        scopes=list(DESKTOP_PET_CAPABILITY_SCOPES),
+        auth_epoch=int(current.account.auth_epoch or 0),
+        expires_at=now + timedelta(seconds=DESKTOP_PET_CAPABILITY_TTL_SECONDS),
+    ))
+    await db.flush()
+    return f"lfpet_{capability}"
+
+
+def require_desktop_pet_capability(
+    current: CurrentLearner,
+    scope: str,
+) -> None:
+    if current.auth_method != "desktop_pet_capability":
+        raise HTTPException(403, "该接口仅允许桌宠受限身份访问")
+    if scope not in current.pet_capability_scopes:
+        raise HTTPException(403, "桌宠身份没有此操作权限")
 
 
 def set_auth_cookie(response: Response, token: str):
@@ -417,7 +592,68 @@ def _desktop_bearer_token(request: Request) -> str | None:
     authorization = request.headers.get("authorization", "")
     if authorization.lower().startswith("bearer ") and valid_desktop_request(request):
         token = authorization[7:].strip()
-        return token or None
+        if token and not token.startswith("lfpet_"):
+            return token
+    return None
+
+
+def _desktop_pet_capability_token(request: Request) -> str | None:
+    authorization = request.headers.get("authorization", "")
+    if not authorization.lower().startswith("bearer ") or not valid_desktop_request(request):
+        return None
+    token = authorization[7:].strip()
+    if token.startswith("lfpet_"):
+        return token.removeprefix("lfpet_") or None
+    return None
+
+
+def _required_desktop_pet_scope(request: Request) -> str | None:
+    """Map the tiny desktop-pet API surface to a capability scope.
+
+    Authorization is checked before a route reaches a normal CurrentLearner
+    dependency, preventing a captured pet capability from being reused for a
+    profile, credential, project mutation or evidence endpoint.
+    """
+    path = request.url.path
+    method = request.method.upper()
+    if method == "GET" and path == "/api/pet/bootstrap":
+        return "pet.bootstrap.read"
+    if method == "GET" and (
+        path == "/api/agent/sessions"
+        or re.fullmatch(r"/api/agent/sessions/\d+", path)
+    ):
+        return "pet.session.read"
+    if method == "POST" and re.fullmatch(r"/api/agent/sessions/\d+/turns", path):
+        return "pet.tutor.turn"
+    if method == "POST" and re.fullmatch(r"/api/agent/sessions/\d+/skill-runs/\d+/actions", path):
+        return "pet.skill.control"
+    if method == "GET" and (
+        path in {"/api/learning-tasks", "/api/learning-tasks/summary"}
+        or re.fullmatch(r"/api/learning-tasks/\d+", path)
+    ):
+        return "pet.task.read"
+    if method == "POST" and re.fullmatch(r"/api/learning-tasks/\d+/actions", path):
+        return "pet.task.control"
+    if method == "GET" and path in {
+        "/api/review/summary", "/api/review/items", "/api/review/agent-context",
+    }:
+        return "pet.review.read"
+    if method == "GET" and (
+        path == "/api/learning-files"
+        or re.fullmatch(r"/api/learning-files/(lecture|practice)/[^/]+", path)
+    ):
+        return "pet.file.read"
+    if path in {
+        "/api/pet/context-packages",
+        "/api/pet/context-packages/document",
+        "/api/pet/context-packages/image",
+        "/api/pet/selection-text",
+    } and method == "POST":
+        return "pet.context.write"
+    if re.fullmatch(r"/api/pet/context-packages/[^/]+", path) and method == "DELETE":
+        return "pet.context.write"
+    if re.fullmatch(r"/api/pet/context-packages/[^/]+/confirm", path) and method == "POST":
+        return "pet.context.write"
     return None
 
 
@@ -553,7 +789,12 @@ async def enforce_browser_request_security(request: Request) -> None:
     if request.url.path == _RUNTIME_BRIDGE_PATH:
         require_runtime_bridge_request(request)
         return
-    if _desktop_bearer_token(request):
+    if valid_desktop_request(request):
+        # Desktop shell (Tauri sidecar) traffic is cross-origin by design and
+        # is authenticated by the per-boot X-LearnFlow-Desktop-Token that the
+        # sidecar hands only to its own window.  Pre-auth bootstrap calls such
+        # as /api/auth/login carry that token but no bearer yet, so exempt the
+        # whole desktop channel here; every route still enforces its own auth.
         return
     if _is_unannotated_in_process_test_request(request):
         return
@@ -593,6 +834,49 @@ async def current_learner_from_request(
     *,
     required: bool = True,
 ) -> CurrentLearner | None:
+    pet_capability = _desktop_pet_capability_token(request)
+    if pet_capability:
+        required_scope = _required_desktop_pet_scope(request)
+        if not required_scope:
+            raise HTTPException(403, "桌宠身份不能访问此接口")
+        now = datetime.utcnow()
+        row = (await db.execute(
+            select(DesktopPetCapability, AuthSession, UserAccount, Learner, LearnerProfile)
+            .join(AuthSession, AuthSession.id == DesktopPetCapability.auth_session_id)
+            .join(UserAccount, UserAccount.id == DesktopPetCapability.user_id)
+            .join(Learner, Learner.id == DesktopPetCapability.learner_id)
+            .join(LearnerProfile, LearnerProfile.learner_id == Learner.id)
+            .where(
+                DesktopPetCapability.token_hash == _token_hash(pet_capability),
+                DesktopPetCapability.revoked_at.is_(None),
+                DesktopPetCapability.expires_at > now,
+                DesktopPetCapability.auth_epoch == UserAccount.auth_epoch,
+                AuthSession.revoked_at.is_(None),
+                AuthSession.expires_at > now,
+                AuthSession.absolute_expires_at > now,
+                AuthSession.idle_expires_at > now,
+                AuthSession.auth_epoch == UserAccount.auth_epoch,
+                UserAccount.status == "active",
+            )
+        )).first()
+        if not row:
+            if required:
+                raise HTTPException(401, "桌宠身份已失效，请在主窗口重新登录")
+            return None
+        capability, session, account, learner, profile = row
+        scopes = tuple(str(item) for item in (capability.scopes or ()) if isinstance(item, str))
+        if required_scope not in scopes:
+            raise HTTPException(403, "桌宠身份没有此操作权限")
+        return CurrentLearner(
+            account=account,
+            learner=learner,
+            profile=profile,
+            is_dev_login=bool(session.is_dev_login),
+            session_id=session.id,
+            auth_method="desktop_pet_capability",
+            pet_capability_scopes=scopes,
+            pet_capability_expires_at=capability.expires_at,
+        )
     bearer_token = _desktop_bearer_token(request)
     raw_token = bearer_token or request.cookies.get(settings.auth_cookie_name)
     auth_method = "desktop_bearer" if bearer_token else "cookie"

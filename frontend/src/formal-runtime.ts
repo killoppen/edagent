@@ -389,6 +389,7 @@ export type FormalAccount = {
   dev_test_login_enabled: boolean
   is_dev_login: boolean
   desktop_auth_token?: string
+  desktop_pet_capability_token?: string
 }
 
 export type FormalAuthStatus = {
@@ -428,6 +429,17 @@ export type FormalModelCredentialMetadata = {
   configured: boolean
   key_hint: string
   updated_at?: string | null
+  base_url: string
+  model: string
+}
+
+export type FormalVisionCredentialMetadata = {
+  configured: boolean
+  uses_tutor_key: boolean
+  key_hint: string
+  updated_at?: string | null
+  base_url: string
+  model: string
 }
 
 export type FormalModelCredentialTestResult = {
@@ -583,10 +595,13 @@ export async function loadFormalModelCredential() {
   return jsonRequest<FormalModelCredentialMetadata>('/api/auth/model-credential')
 }
 
-export async function saveFormalModelCredential(apiKey: string) {
+export async function saveFormalModelCredential(apiKey: string, baseUrl = '', model = '') {
+  const body: Record<string, string> = { api_key: apiKey }
+  if (baseUrl.trim()) body.base_url = baseUrl
+  if (model.trim()) body.model = model
   return jsonRequest<FormalModelCredentialMetadata>('/api/auth/model-credential', {
     method: 'PUT',
-    body: JSON.stringify({ api_key: apiKey }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -600,6 +615,39 @@ export async function testFormalModelCredential(baseUrl: string, model: string) 
   return jsonRequest<FormalModelCredentialTestResult>('/api/auth/model-credential/test', {
     method: 'POST',
     body: JSON.stringify({ base_url: baseUrl, model }),
+  })
+}
+
+export async function loadFormalVisionCredential() {
+  return jsonRequest<FormalVisionCredentialMetadata>('/api/auth/vision-credential')
+}
+
+export async function saveFormalVisionCredential(input: {
+  apiKey: string
+  baseUrl: string
+  model: string
+  useTutorKey: boolean
+}) {
+  return jsonRequest<FormalVisionCredentialMetadata>('/api/auth/vision-credential', {
+    method: 'PUT',
+    body: JSON.stringify({
+      api_key: input.apiKey,
+      base_url: input.baseUrl,
+      model: input.model,
+      use_tutor_key: input.useTutorKey,
+    }),
+  })
+}
+
+export async function deleteFormalVisionCredential() {
+  return jsonRequest<FormalVisionCredentialMetadata>('/api/auth/vision-credential', {
+    method: 'DELETE',
+  })
+}
+
+export async function testFormalVisionCredential() {
+  return jsonRequest<FormalModelCredentialTestResult>('/api/auth/vision-credential/test', {
+    method: 'POST',
   })
 }
 
@@ -1056,6 +1104,99 @@ export async function updateFormalProjectSourceHealth(
   return jsonRequest<Record<string, unknown>>(`/api/vnext-projects/${projectId}/sources/${sourceId}/health`, {
     method: 'POST', body: JSON.stringify({ action, reason }),
   })
+}
+
+export type FormalDesktopPetCapabilityRefresh = {
+  desktop_pet_capability_token: string
+}
+
+export type FormalDesktopPetBootstrap = {
+  authority: 'formal_learnflow_objects'
+  learner: Pick<FormalLearner, 'id' | 'display_name'>
+  capability: { scopes: string[]; expires_at?: string | null }
+  sessions: FormalTutorSessionSummary[]
+  tasks: FormalLearningTask[]
+  review: {
+    due: number
+    focus_subjects: Array<{ subject: string; reason_code: 'recent_retrieval_failure' | 'review_lapse' }>
+    mastery_unchanged: true
+  }
+  model: { configured: boolean; status: 'ready' | 'unavailable' }
+}
+
+export type FormalDesktopPetContext = {
+  id: string
+  kind: 'text' | 'ocr_text' | 'image_observation' | 'document_excerpt' | 'video_transcript'
+  status: 'pending' | 'confirmed' | 'consumed' | 'expired' | 'deleted'
+  preview: string
+  content_length: number
+  source_label: string
+  captured_at: string
+  expires_at?: string | null
+  requires_confirmation: boolean
+  mastery_unchanged: true
+}
+
+export async function refreshFormalDesktopPetCapability() {
+  return jsonRequest<FormalDesktopPetCapabilityRefresh>('/api/auth/desktop-pet-capability', {
+    method: 'POST',
+  })
+}
+
+export async function loadFormalDesktopPetBootstrap() {
+  return jsonRequest<FormalDesktopPetBootstrap>('/api/pet/bootstrap')
+}
+
+export async function createFormalDesktopPetContext(input: {
+  kind?: FormalDesktopPetContext['kind']
+  content: string
+  sourceLabel?: string
+  capturedAt?: string
+}) {
+  return jsonRequest<FormalDesktopPetContext>('/api/pet/context-packages', {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: input.kind || 'text',
+      content: input.content,
+      source_label: input.sourceLabel || '用户主动提供的外部参考',
+      captured_at: input.capturedAt || new Date().toISOString(),
+    }),
+  })
+}
+
+export async function createFormalDesktopPetImageContext(input: {
+  file: File
+  questionHint?: string
+  clientContextId: string
+}) {
+  const form = new FormData()
+  form.append('file', input.file, input.file.name || 'attached-image.png')
+  form.append('question_hint', input.questionHint || '')
+  form.append('client_context_id', input.clientContextId)
+  return formRequest<FormalDesktopPetContext>('/api/pet/context-packages/image', form)
+}
+
+export async function transcribeFormalDesktopPetSelection(file: File) {
+  const form = new FormData()
+  form.append('file', file, file.name || 'desktop-selection.png')
+  return formRequest<{ text: string; source_label: string; mastery_unchanged: true }>(
+    '/api/pet/selection-text',
+    form,
+  )
+}
+
+export async function confirmFormalDesktopPetContext(contextId: string, sessionId: number) {
+  return jsonRequest<FormalDesktopPetContext>(`/api/pet/context-packages/${encodeURIComponent(contextId)}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId }),
+  })
+}
+
+export async function deleteFormalDesktopPetContext(contextId: string) {
+  return jsonRequest<{ status: 'deleted'; mastery_unchanged: true }>(
+    `/api/pet/context-packages/${encodeURIComponent(contextId)}`,
+    { method: 'DELETE' },
+  )
 }
 
 export async function loadFormalTutorSession(sessionId: number) {

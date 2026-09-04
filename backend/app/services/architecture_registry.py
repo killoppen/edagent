@@ -17,7 +17,7 @@ from typing import Any
 from app.services.action_board import ACTION_BOARD
 
 
-REGISTRY_VERSION = "2026-09-02.5"
+REGISTRY_VERSION = "2026-09-03.3"
 EVENT_SCHEMA_VERSION = "learnflow.evidence.v1"
 SKILL_SPEC_VERSION = "learnflow.skill.v3"
 # The learner-facing SkillSpec changed in this registry release.
@@ -377,6 +377,10 @@ TOOLS = {
                      KERNEL_NAMES, (), "typed ContextEnvelope -> bounded observe/act/observe loop -> structured AgentTurnTrace; read-only model tools and no direct learner-state write"),
         ToolContract("vnext_chat_session_store", "vNext Cross-browser Chat Session Store", "tutor_agent", "vnext", "adapter",
                      (), (), "learner-owned AgentSession + idempotent AgentMessage projection; browser cache is non-authoritative and persistence creates no learning evidence"),
+        ToolContract("desktop_pet_gateway", "Desktop Pet Least-privilege Gateway", "tutor_agent", "desktop", "adapter",
+                     (), (), "short-lived parent-session-bound opaque capability token -> owned formal AgentSession, LearningTask, SkillRun, ReviewSchedule and LearningFile read-only summaries and continuation turns; the desktop-pet window continues only an existing formal session as a restricted desktop-pet identity that may attach confirmed external context references (TTL-bound, session-confirmed, consumed by exactly one Tutor turn) and can never change session scope or execute session actions on send; assistant replies reuse the existing safe Markdown renderer and pet navigation waits for a main-window acknowledgement before reporting success; highlighted-text capture records the source foreground window at shortcut time, first reads native Unicode selection text with the clipboard restored immediately, then falls back to server vision transcription for non-copyable content; raw content stays local/TTL-only, is cleared on close or consumption and never enters an AgentMessage, and no operation writes an EvidenceEvent or KernelState"),
+        ToolContract("desktop_pet_vision_observer", "Desktop Pet Image Observation Adapter", "tutor_agent", "desktop", "adapter",
+                     (), (), "explicit foreground image paste or local file selection -> local thumbnail preview -> in-memory validation, EXIF-stripping normalization and account-scoped OpenAI-compatible vision call (dedicated encrypted vision credential or the same learner's Tutor credential) -> bounded untrusted image_observation TTL context; the labeled send action is the explicit request and confirmation for that attached image, raw image bytes never enter AgentMessage, EvidenceEvent, KernelState or persistent storage, and the single-turn consumption gate remains authoritative"),
         ToolContract("computer_knowledge_search", "Explanation-oriented Computer Knowledge Search", "learning_design_agent", "vnext", "read",
                      (), (), "privacy scrub -> bounded facet plan -> tiered adapters + circuit breakers -> hybrid deterministic rerank/MMR -> coverage audit -> one bounded gap search -> versioned untrusted evidence bundle; quick/standard/deep budgets and no learner-state write"),
         ToolContract("web_evidence_reader", "Allow-listed Web Evidence Reader", "learning_design_agent", "vnext", "read",
@@ -570,6 +574,8 @@ TOOL_INTERFACE_ROLES = {
     "teaching_contract_gate": "policy",
     "source_integrity_monitor": "policy",
     "vnext_chat_session_store": "adapter",
+    "desktop_pet_gateway": "adapter",
+    "desktop_pet_vision_observer": "adapter",
     "workflow_gateway": "adapter",
     "workflow_validator": "adapter",
 }
@@ -1170,6 +1176,9 @@ WORKBENCHES = {
                            "evaluate_transfer_variant"), "fused"),
         WorkbenchContract("desktop_workspace", "Desktop File Workspace", "tauri://workspace", "tutor_agent",
                           ("link_project_workspace", "inspect_workspace_files", "propose_workspace_change", "apply_workspace_change", "open_managed_learning_artifact", "edit_managed_lecture", "annotate_learning_artifact", "delegate_local_agent_task", "inspect_local_agent_run", "cancel_local_agent_run", "apply_local_agent_result")),
+        WorkbenchContract("desktop_pet", "Desktop Pet Companion", "tauri://pet", "tutor_agent",
+                          ("coordinate_vnext_agent_turn", "desktop_pet_companion", "desktop_pet_task_control",
+                           "desktop_pet_main_navigation", "desktop_pet_context_attachment"), "desktop"),
         WorkbenchContract("xingchen_studio", "Xingchen Workflow Studio", "external", "learning_design_agent",
                           ("generate_lecture", "request_remediation_explanation"), "companion"),
     )
@@ -1266,6 +1275,10 @@ CAPABILITY_OWNERS = {
     "inspect_local_agent_run": ("tutor_agent", "local_agent_broker", "desktop_workspace"),
     "cancel_local_agent_run": ("tutor_agent", "local_agent_broker", "desktop_workspace"),
     "apply_local_agent_result": ("tutor_agent", "local_agent_broker", "desktop_workspace"),
+    "desktop_pet_companion": ("tutor_agent", "desktop_pet_gateway", "desktop_pet"),
+    "desktop_pet_task_control": ("tutor_agent", "desktop_pet_gateway", "desktop_pet"),
+    "desktop_pet_main_navigation": ("tutor_agent", "desktop_pet_gateway", "desktop_pet"),
+    "desktop_pet_context_attachment": ("tutor_agent", "desktop_pet_gateway", "desktop_pet"),
 }
 
 
@@ -1479,6 +1492,7 @@ _PYTHON_BINDING_TARGETS = {
     "py:personal_concept_graph.build": ("app.services.personal_concept_graph", "build_personal_concept_graph"),
     "py:profile.growth": ("app.services.profile", "growth_projection"),
     "py:project_resources.search": ("app.services.project_proposals", "start_resource_search"),
+    "py:pet.image_observation": ("app.services.desktop_pet_vision", "observe_desktop_pet_image"),
 }
 
 
@@ -1574,6 +1588,11 @@ _API_BINDING_TARGETS = {
     "api:local_agent.cancel": ("app.api.local_agent", "/local-agent/runs/{run_id}/cancel", "POST", "cancel_local_agent_run"),
     "api:local_agent.apply": ("app.api.local_agent", "/local-agent/runs/{run_id}/apply", "POST", "apply_local_agent_run"),
     "api:demo.status": ("app.api.auth", "/demo/status", "GET", "competition_demo_status"),
+    "api:pet.bootstrap": ("app.api.pet", "/pet/bootstrap", "GET", "desktop_pet_bootstrap"),
+    "api:pet.context": ("app.api.pet", "/pet/context-packages", "POST", "create_context_package"),
+    "api:pet.selection_text": ("app.api.pet", "/pet/selection-text", "POST", "transcribe_selection_text"),
+    "api:pet.document_context": ("app.api.pet", "/pet/context-packages/document", "POST", "create_document_context_package"),
+    "api:pet.image_context": ("app.api.pet", "/pet/context-packages/image", "POST", "create_image_context_package"),
 }
 
 
@@ -1632,6 +1651,7 @@ _FRONTEND_COMPONENT_TARGETS = {
     "workbench:review": ("frontend/src/ReviewWorkbenchPage.tsx", "ReviewWorkbenchPage", "/review"),
     "workbench:competition_demo": ("frontend/src/ReviewWorkbenchPage.tsx", "ReviewWorkbenchPage", "/review"),
     "workbench:desktop_workspace": ("frontend/src/main.tsx", "App", ""),
+    "workbench:desktop_pet": ("frontend/src/DesktopPet.tsx", "DesktopPet", ""),
 }
 
 
@@ -1764,6 +1784,8 @@ _TOOL_BINDING_IDS = {
     "workspace_file_service": ("py:workspace.scan",),
     "managed_artifact_service": ("api:phase2.put_lecture",),
     "local_agent_broker": ("py:local_agent.create",),
+    "desktop_pet_gateway": ("api:pet.bootstrap", "api:pet.context", "api:pet.selection_text"),
+    "desktop_pet_vision_observer": ("py:pet.image_observation", "api:pet.image_context"),
 }
 
 

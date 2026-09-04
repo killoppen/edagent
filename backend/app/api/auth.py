@@ -20,6 +20,7 @@ from app.schemas.auth import (
     AdminAccountProjection,
     AuthenticatedAccountResponse,
     CsrfTokenResponse,
+    DesktopPetCapabilityRefreshResponse,
     LoginRequest,
     LogoutResponse,
     ModelCredentialMetadata,
@@ -29,6 +30,8 @@ from app.schemas.auth import (
     ModelCredentialUpdateRequest,
     PasswordChangeRequest,
     RegisterRequest,
+    VisionCredentialMetadata,
+    VisionCredentialUpdateRequest,
 )
 from app.services.auth import (
     INVALID_LOGIN_DETAIL,
@@ -43,11 +46,14 @@ from app.services.auth import (
     create_auth_session,
     csrf_token_from_request,
     current_learner_from_request,
-    decrypt_model_credential,
     encrypt_model_credential,
+    account_model_provider_config,
+    account_vision_provider_config,
+    encrypt_vision_credential,
     get_current_learner,
     hash_password_async,
     is_loopback_request,
+    issue_desktop_pet_capability,
     login_backoff_seconds,
     login_request_keys,
     model_credential_configured,
@@ -57,18 +63,24 @@ from app.services.auth import (
     require_runtime_bridge_request,
     set_auth_cookie,
     valid_desktop_request,
+    vision_credential_configured,
     verify_password_async,
 )
 from app.services.demo_seed import DEMO_USERNAME, demo_manifest
 from app.services.learning_runtime import ensure_kernel_states, record_event
 from app.services.profile import award_career_goal
+from app.services.provider_compat import create_chat_completion
 
 
 router = APIRouter(tags=["Authentication"])
 dev_router = APIRouter(prefix="/dev", tags=["Development"])
 
 
-def _account_view(current: CurrentLearner, desktop_auth_token: str | None = None) -> dict:
+def _account_view(
+    current: CurrentLearner,
+    desktop_auth_token: str | None = None,
+    desktop_pet_capability_token: str | None = None,
+) -> dict:
     result = {
         "id": current.account.id,
         "account_number": current.account.account_number,
@@ -93,6 +105,8 @@ def _account_view(current: CurrentLearner, desktop_auth_token: str | None = None
     }
     if desktop_auth_token:
         result["desktop_auth_token"] = desktop_auth_token
+    if desktop_pet_capability_token:
+        result["desktop_pet_capability_token"] = desktop_pet_capability_token
     return result
 
 
@@ -102,6 +116,27 @@ def _model_credential_view(account: UserAccount) -> ModelCredentialMetadata:
         configured=configured,
         key_hint=str(account.api_key_hint or "") if configured else "",
         updated_at=account.api_key_updated_at,
+        base_url=str(account.provider_base_url or ""),
+        model=str(account.provider_model or ""),
+    )
+
+
+def _vision_credential_view(account: UserAccount) -> VisionCredentialMetadata:
+    dedicated = vision_credential_configured(account)
+    base_url = str(account.vision_provider_base_url or account.provider_base_url or "")
+    model = str(account.vision_provider_model or account.provider_model or "")
+    has_key = dedicated or model_credential_configured(account)
+    return VisionCredentialMetadata(
+        configured=bool(has_key and base_url and model),
+        uses_tutor_key=not dedicated,
+        key_hint=(
+            str(account.vision_api_key_hint or "") if dedicated
+            else str(account.api_key_hint or "") if model_credential_configured(account)
+            else ""
+        ),
+        updated_at=(account.vision_api_key_updated_at if dedicated else account.api_key_updated_at),
+        base_url=base_url,
+        model=model,
     )
 
 
@@ -255,9 +290,18 @@ async def register(
         await db.rollback()
         raise HTTPException(409, "用户名已存在") from None
     set_auth_cookie(response, token)
+    current = CurrentLearner(account, learner, profile)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
-        CurrentLearner(account, learner, profile),
-        token if valid_desktop_request(request) else None,
+        current,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )
 
 
@@ -314,9 +358,18 @@ async def login(
     token = await create_auth_session(db, account)
     await db.commit()
     set_auth_cookie(response, token)
+    current = CurrentLearner(account, learner, profile)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
-        CurrentLearner(account, learner, profile),
-        token if valid_desktop_request(request) else None,
+        current,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )
 
 
@@ -349,21 +402,30 @@ async def put_model_credential(
     current: CurrentLearner = Depends(get_current_learner),
 ):
     api_key = data.api_key.strip()
-    if not api_key:
+    if not api_key and not data.base_url.strip() and not data.model.strip():
         return _model_credential_view(current.account)
-    try:
-        envelope = encrypt_model_credential(current.account.id, api_key)
-    except ModelCredentialFormatError:
-        raise HTTPException(
-            422,
-            "API Key 格式无效：只能包含不带空白的 ASCII 字符",
-        ) from None
-    except ModelCredentialEncryptionUnavailable:
-        _raise_model_credential_kek_error()
-    current.account.api_key_ciphertext = envelope.ciphertext
-    current.account.api_key_nonce = envelope.nonce
-    current.account.api_key_hint = envelope.key_hint
-    current.account.api_key_encryption_version = envelope.version
+    base_url = _validated_model_base_url(
+        data.base_url.strip() or current.account.provider_base_url or settings.llm_base_url
+    )
+    model = data.model.strip() or current.account.provider_model or settings.llm_model
+    if not model:
+        raise HTTPException(422, "模型名称不能为空")
+    if api_key:
+        try:
+            envelope = encrypt_model_credential(current.account.id, api_key)
+        except ModelCredentialFormatError:
+            raise HTTPException(
+                422,
+                "API Key 格式无效：只能包含不带空白的 ASCII 字符",
+            ) from None
+        except ModelCredentialEncryptionUnavailable:
+            _raise_model_credential_kek_error()
+        current.account.api_key_ciphertext = envelope.ciphertext
+        current.account.api_key_nonce = envelope.nonce
+        current.account.api_key_hint = envelope.key_hint
+        current.account.api_key_encryption_version = envelope.version
+    current.account.provider_base_url = base_url
+    current.account.provider_model = model
     current.account.api_key_updated_at = datetime.utcnow()
     await db.commit()
     return _model_credential_view(current.account)
@@ -378,9 +440,138 @@ async def delete_model_credential(
     current.account.api_key_nonce = None
     current.account.api_key_hint = None
     current.account.api_key_encryption_version = None
+    current.account.provider_base_url = None
+    current.account.provider_model = None
     current.account.api_key_updated_at = datetime.utcnow()
     await db.commit()
     return _model_credential_view(current.account)
+
+
+@router.get("/auth/vision-credential", response_model=VisionCredentialMetadata)
+async def get_vision_credential(
+    response: Response,
+    current: CurrentLearner = Depends(get_current_learner),
+):
+    response.headers["Cache-Control"] = "no-store"
+    return _vision_credential_view(current.account)
+
+
+@router.put("/auth/vision-credential", response_model=VisionCredentialMetadata)
+async def put_vision_credential(
+    data: VisionCredentialUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current: CurrentLearner = Depends(get_current_learner),
+):
+    base_url = _validated_model_base_url(
+        data.base_url.strip()
+        or current.account.vision_provider_base_url
+        or current.account.provider_base_url
+        or settings.llm_base_url
+    )
+    model = (
+        data.model.strip()
+        or current.account.vision_provider_model
+        or current.account.provider_model
+        or settings.llm_model
+    )
+    if not model:
+        raise HTTPException(422, "视觉模型名称不能为空")
+    if data.use_tutor_key:
+        current.account.vision_api_key_ciphertext = None
+        current.account.vision_api_key_nonce = None
+        current.account.vision_api_key_hint = None
+        current.account.vision_api_key_encryption_version = None
+        current.account.vision_api_key_updated_at = datetime.utcnow()
+    elif data.api_key.strip():
+        try:
+            envelope = encrypt_vision_credential(current.account.id, data.api_key.strip())
+        except ModelCredentialFormatError:
+            raise HTTPException(
+                422,
+                "视觉 API Key 格式无效：只能包含不带空白的 ASCII 字符",
+            ) from None
+        except ModelCredentialEncryptionUnavailable:
+            _raise_model_credential_kek_error()
+        current.account.vision_api_key_ciphertext = envelope.ciphertext
+        current.account.vision_api_key_nonce = envelope.nonce
+        current.account.vision_api_key_hint = envelope.key_hint
+        current.account.vision_api_key_encryption_version = envelope.version
+        current.account.vision_api_key_updated_at = datetime.utcnow()
+    current.account.vision_provider_base_url = base_url
+    current.account.vision_provider_model = model
+    await db.commit()
+    return _vision_credential_view(current.account)
+
+
+@router.delete("/auth/vision-credential", response_model=VisionCredentialMetadata)
+async def delete_vision_credential(
+    db: AsyncSession = Depends(get_db),
+    current: CurrentLearner = Depends(get_current_learner),
+):
+    current.account.vision_api_key_ciphertext = None
+    current.account.vision_api_key_nonce = None
+    current.account.vision_api_key_hint = None
+    current.account.vision_api_key_encryption_version = None
+    current.account.vision_api_key_updated_at = datetime.utcnow()
+    current.account.vision_provider_base_url = None
+    current.account.vision_provider_model = None
+    await db.commit()
+    return _vision_credential_view(current.account)
+
+
+@router.post(
+    "/auth/vision-credential/test",
+    response_model=ModelCredentialTestResponse,
+)
+async def test_vision_credential(
+    current: CurrentLearner = Depends(get_current_learner),
+):
+    metadata = _vision_credential_view(current.account)
+    if not metadata.configured:
+        raise HTTPException(409, "尚未配置可用的视觉模型")
+    try:
+        provider_config = account_vision_provider_config(current.account)
+    except ModelCredentialEncryptionUnavailable:
+        _raise_model_credential_kek_error()
+    except (ModelCredentialDecryptionError, ModelCredentialFormatError):
+        raise HTTPException(500, "视觉模型凭据无法解密，请重新配置") from None
+    try:
+        started = time.perf_counter()
+        await create_chat_completion(
+            api_key=provider_config.api_key,
+            base_url=provider_config.base_url,
+            model=provider_config.model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "只回复 OK"},
+                    {"type": "image_url", "image_url": {"url": (
+                        "data:image/png;base64,"
+                        "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAI0lEQVR4nGP8//8/AymAiSTVDKMaiANMRKqDg1ENxACSQwkAVW0DHeN02ZEAAAAASUVORK5CYII="
+                    )}},
+                ],
+            }],
+            max_tokens=16,
+            timeout=15,
+            **openai_chat_provider_kwargs(
+                provider_config.base_url,
+                provider_config.model,
+                thinking_enabled=False,
+            ),
+        )
+        latency_ms = round((time.perf_counter() - started) * 1000)
+    except Exception as exc:
+        status_code = getattr(exc, "status_code", None)
+        if status_code in {400, 404, 415, 422}:
+            raise HTTPException(400, "模型或服务地址不支持图片理解") from None
+        if status_code in {401, 403}:
+            raise HTTPException(400, "视觉模型凭据验证失败") from None
+        raise HTTPException(502, "视觉模型连接测试失败") from None
+    return ModelCredentialTestResponse(
+        status="ok",
+        model=provider_config.model,
+        latency_ms=latency_ms,
+    )
 
 
 @router.post(
@@ -394,7 +585,7 @@ async def test_model_credential(
     if not model_credential_configured(current.account):
         raise HTTPException(409, "尚未配置账户模型凭据")
     try:
-        api_key = decrypt_model_credential(current.account)
+        provider_config = account_model_provider_config(current.account)
     except ModelCredentialFormatError:
         raise HTTPException(
             422,
@@ -409,17 +600,16 @@ async def test_model_credential(
         ) from None
 
     base_url = _validated_model_base_url(
-        data.base_url.strip() or settings.llm_base_url
+        data.base_url.strip() or provider_config.base_url or settings.llm_base_url
     )
-    model = data.model.strip() or settings.llm_model
+    model = data.model.strip() or provider_config.model or settings.llm_model
     if not model:
         raise HTTPException(422, "模型名称不能为空")
     try:
-        from openai import AsyncOpenAI
-
         started = time.perf_counter()
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        provider_response = await client.chat.completions.create(
+        provider_response = await create_chat_completion(
+            api_key=provider_config.api_key,
+            base_url=base_url,
             model=model,
             messages=[{"role": "user", "content": "只回复 OK"}],
             max_tokens=16,
@@ -468,7 +658,7 @@ async def resolve_model_credential_for_runtime(
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
     try:
-        api_key = decrypt_model_credential(current.account)
+        provider_config = account_model_provider_config(current.account)
     except ModelCredentialFormatError:
         raise HTTPException(
             422,
@@ -486,9 +676,11 @@ async def resolve_model_credential_for_runtime(
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
     return ModelCredentialResolveResponse(
-        api_key=api_key,
+        api_key=provider_config.api_key,
         key_hint=str(current.account.api_key_hint or ""),
         version=int(current.account.api_key_encryption_version),
+        base_url=provider_config.base_url,
+        model=provider_config.model,
     )
 
 
@@ -533,9 +725,17 @@ async def change_password(
     token = await create_auth_session(db, current.account)
     await db.commit()
     set_auth_cookie(response, token)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
         current,
-        token if valid_desktop_request(request) else None,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )
 
 
@@ -573,7 +773,50 @@ async def auth_status(
     current = await current_learner_from_request(request, db, required=False)
     if current is None:
         return {"authenticated": False}
-    return {"authenticated": True, **_account_view(current)}
+    desktop_auth_token = None
+    desktop_pet_capability_token = None
+    if valid_desktop_request(request):
+        desktop_auth_token = await create_auth_session(
+            db,
+            current.account,
+            is_dev_login=current.is_dev_login,
+        )
+        desktop_pet_capability_token = await issue_desktop_pet_capability(
+            db, current=current, auth_token=desktop_auth_token,
+        )
+        await db.commit()
+    return {
+        "authenticated": True,
+        **_account_view(current, desktop_auth_token, desktop_pet_capability_token),
+    }
+
+
+@router.post(
+    "/auth/desktop-pet-capability",
+    response_model=DesktopPetCapabilityRefreshResponse,
+)
+async def refresh_desktop_pet_capability(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    current: CurrentLearner = Depends(get_current_learner),
+):
+    """Refresh the pet credential from the parent desktop bearer only."""
+    if (
+        not valid_desktop_request(request)
+        or current.auth_method != "desktop_bearer"
+        or current.session_id is None
+    ):
+        raise HTTPException(403, "只有 LearnFlow 主窗口可以续期桌宠身份")
+    capability = await issue_desktop_pet_capability(
+        db,
+        current=current,
+        auth_session_id=current.session_id,
+    )
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return {"desktop_pet_capability_token": capability}
 
 
 @router.get("/admin/accounts", response_model=list[AdminAccountProjection])
@@ -661,9 +904,18 @@ async def competition_demo_login(
     token = await create_auth_session(db, account, is_dev_login=True)
     await db.commit()
     set_auth_cookie(response, token)
+    current = CurrentLearner(account, learner, profile, is_dev_login=True)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
-        CurrentLearner(account, learner, profile, is_dev_login=True),
-        token if valid_desktop_request(request) else None,
+        current,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )
 
 
@@ -737,7 +989,16 @@ async def dev_login(
     token = await create_auth_session(db, account, is_dev_login=True)
     await db.commit()
     set_auth_cookie(response, token)
+    current = CurrentLearner(account, learner, profile, is_dev_login=True)
+    desktop_auth_token = token if valid_desktop_request(request) else None
+    desktop_pet_capability_token = (
+        await issue_desktop_pet_capability(db, current=current, auth_token=token)
+        if desktop_auth_token else None
+    )
+    if desktop_pet_capability_token:
+        await db.commit()
     return _account_view(
-        CurrentLearner(account, learner, profile, is_dev_login=True),
-        token if valid_desktop_request(request) else None,
+        current,
+        desktop_auth_token,
+        desktop_pet_capability_token,
     )

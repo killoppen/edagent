@@ -3,8 +3,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import {
   initializeRuntimeClient,
   isolateLegacyWorkspaceCache,
+  isDesktopPetWindow,
   isDesktopRuntime,
   learnerWorkspaceStorageKey,
+  syncDesktopPetSession,
 } from './runtime-client.ts'
 import {
   isTutorMode,
@@ -61,6 +63,7 @@ import {
 } from './tooling'
 import ComposerCapabilityPicker from './ComposerCapabilityPicker'
 import AuthGate, { type AuthGateSession } from './AuthGate'
+import DesktopPet from './DesktopPet.tsx'
 import AccountModelSettings from './AccountModelSettings'
 import {
   activeLearningPlanProjection,
@@ -122,6 +125,7 @@ import {
   recordLearningFileAccess,
   processKnowledgeLibrarySource,
   processFormalProjectSource,
+  refreshFormalDesktopPetCapability,
   removeFormalProjectSource,
   reviseFormalProjectRoadmap,
   setFormalMemoryArchived,
@@ -413,6 +417,65 @@ function formalChatFingerprint(conversation: Conversation) {
   })
 }
 
+let desktopPetOpening: Promise<void> | undefined
+
+type DesktopPetNavigation = {
+  requestId: string
+  path: string
+}
+
+async function openDesktopPet(
+  sessionId?: number,
+  options: { reveal?: boolean; syncSession?: boolean } = {},
+) {
+  if (desktopPetOpening) return desktopPetOpening
+  const reveal = options.reveal ?? true
+  desktopPetOpening = (async () => {
+    if (options.syncSession !== false) {
+      const activeSessionId = sessionId ?? (await createFormalTutorSession(false)).id
+      await syncDesktopPetSession(activeSessionId)
+    }
+    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow')
+    const existing = await WebviewWindow.getByLabel('pet')
+    if (existing) {
+      if (reveal) {
+        await existing.show()
+        await existing.setFocus()
+      }
+      return
+    }
+    await refreshFormalDesktopPetCapability().catch(() => undefined)
+    const pet = new WebviewWindow('pet', {
+      url: 'index.html',
+      title: 'LearnFlow 桌宠',
+      width: 360,
+      height: 520,
+      minWidth: 160,
+      minHeight: 180,
+      decorations: false,
+      transparent: true,
+      shadow: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: true,
+      visible: reveal,
+    })
+    await new Promise<void>((resolve, reject) => {
+      void pet.once('tauri://created', () => resolve())
+      void pet.once('tauri://error', event => reject(event.payload))
+    })
+    if (reveal) {
+      await pet.show()
+      await pet.setFocus()
+    }
+  })()
+  try {
+    await desktopPetOpening
+  } finally {
+    desktopPetOpening = undefined
+  }
+}
+
 function chatTab(conversation: Conversation): WorkspaceTab {
   return {
     id: `chat:${conversation.id}`,
@@ -440,8 +503,7 @@ function learningFileTab(
   }
 }
 
-function tabFromCurrentPath(conversations: Conversation[]): WorkspaceTab | undefined {
-  const path = window.location.pathname
+function tabFromPath(path: string, conversations: Conversation[]): WorkspaceTab | undefined {
   if (path === '/settings') return SETTINGS_TAB
   if (path === '/projects') return PROJECTS_TAB
   if (path.startsWith('/projects/')) {
@@ -468,6 +530,10 @@ function tabFromCurrentPath(conversations: Conversation[]): WorkspaceTab | undef
     if (conversation) return chatTab(conversation)
   }
   return undefined
+}
+
+function tabFromCurrentPath(conversations: Conversation[]): WorkspaceTab | undefined {
+  return tabFromPath(window.location.pathname, conversations)
 }
 
 function initialState(): PersistedState {
@@ -656,6 +722,25 @@ function App({ auth }: { auth: AuthGateSession }) {
   const splitConversation = splitTab?.kind === 'chat'
     ? workspace.conversations.find(item => item.id === splitTab.conversationId)
     : undefined
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return
+    void syncDesktopPetSession(activeConversation?.formalSessionId).catch(() => undefined)
+  }, [activeConversation?.formalSessionId])
+
+  useEffect(() => {
+    if (!isDesktopRuntime() || !auth.account.learner_id) return
+    void openDesktopPet(undefined, { reveal: false, syncSession: false }).catch(() => undefined)
+  }, [auth.account.learner_id])
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return
+    const refresh = () => {
+      void refreshFormalDesktopPetCapability().catch(() => undefined)
+    }
+    const timer = window.setInterval(refresh, 8 * 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [auth.account.learner_id])
 
   useEffect(() => {
     try {
@@ -1040,6 +1125,39 @@ function App({ auth }: { auth: AuthGateSession }) {
     if (fallback && !fallback.startsWith('/tasks')) window.location.assign(fallback)
     setFormalBusyKey('')
   }
+  useEffect(() => {
+    if (!isDesktopRuntime()) return
+    let unlisten: (() => void) | undefined
+    void import('@tauri-apps/api/event')
+      .then(async ({ emitTo, listen }) => {
+        const unlistenNavigation = await listen<DesktopPetNavigation>('learnflow:desktop-pet-navigate', event => {
+          const request = event.payload
+          const target = request?.path ? tabFromPath(request.path, workspace.conversations) : undefined
+          if (target) openTab(target)
+          if (request?.requestId) {
+            void emitTo('pet', 'learnflow:desktop-pet-navigation-ack', {
+              requestId: request.requestId,
+              path: request.path,
+              accepted: Boolean(target),
+            })
+          }
+        })
+        const unlistenPetRequest = await listen('learnflow:desktop-pet-requested', () => {
+          void openDesktopPet(activeConversation?.formalSessionId).catch(() => undefined)
+        })
+        const unlistenInstanceActivated = await listen('learnflow:desktop-instance-activated', () => {
+          setSidebarOpen(false)
+        })
+        return () => {
+          unlistenNavigation()
+          unlistenPetRequest()
+          unlistenInstanceActivated()
+        }
+      })
+      .then(listener => { unlisten = listener })
+      .catch(() => undefined)
+    return () => { unlisten?.() }
+  }, [activeConversation?.formalSessionId, workspace.conversations])
 
   const newConversation = () => {
     const conversation = createConversation()
@@ -1777,7 +1895,9 @@ function App({ auth }: { auth: AuthGateSession }) {
       }
     }
 
-    const configurationIssue = tutorConfigurationIssue(workspace.settings.baseUrl, workspace.settings.model)
+    const configurationIssue = isDesktopRuntime()
+      ? ''
+      : tutorConfigurationIssue(workspace.settings.baseUrl, workspace.settings.model)
     const optimisticTurnStep = learningProjection ? currentLearningSkillStep(learningProjection) : undefined
 
     // Paint the learner turn before any formal persistence or context work.
@@ -3458,6 +3578,7 @@ function App({ auth }: { auth: AuthGateSession }) {
             <button type="button" onClick={() => openTab(REVIEW_TAB)}><span>↺</span>复习与错题</button>
             <button type="button" onClick={() => openTab(TASKS_TAB)}><span>☷</span>学习任务</button>
             <button type="button" onClick={() => openTab(LEARNING_PATH_TAB)}><span>⌁</span>学习路径</button>
+            {isDesktopRuntime() && <button type="button" onClick={() => void openDesktopPet(activeConversation?.formalSessionId)}><span>◌</span>打开桌宠</button>}
           </nav>
           <div className="sidebar-scroll-area">
             <section className="sidebar-section sidebar-projects">
@@ -3971,7 +4092,9 @@ const rootScope = globalThis as typeof globalThis & { __learnflowRoot?: Root }
 const root = rootScope.__learnflowRoot || createRoot(rootElement)
 rootScope.__learnflowRoot = root
 void initializeRuntimeClient().then(() => root.render(
-  <AuthGate>
-    {auth => <App key={`learner:${auth.account.learner_id}`} auth={auth} />}
-  </AuthGate>,
+  isDesktopPetWindow()
+    ? <DesktopPet />
+    : <AuthGate>
+        {auth => <App key={`learner:${auth.account.learner_id}`} auth={auth} />}
+      </AuthGate>,
 ))

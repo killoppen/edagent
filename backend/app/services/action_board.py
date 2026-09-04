@@ -36,6 +36,26 @@ ACTION_BOARD = {
              "search_computer_knowledge", "read_web_evidence", "search_learning_videos", "inspect_learning_video", "generate_learning_diagram", "generate_learning_animation"),
         ),
         ActionDefinition(
+            "desktop_pet_companion", "读取正式会话、任务、复习和学习文件陪伴摘要", "none", "none",
+            {},
+            ("desktop_pet_task_control", "desktop_pet_main_navigation", "desktop_pet_context_attachment"),
+        ),
+        ActionDefinition(
+            "desktop_pet_task_control", "开始、暂停或恢复已存在的学习任务", "context", "explicit_or_click",
+            {},
+            ("desktop_pet_main_navigation",),
+        ),
+        ActionDefinition(
+            "desktop_pet_main_navigation", "在主窗口定位正式项目、任务、复习或学习文件", "context", "click_or_explicit",
+            {},
+            (),
+        ),
+        ActionDefinition(
+            "desktop_pet_context_attachment", "确认并临时附加外部参考到当前 Tutor 回合", "context", "explicit_or_click",
+            {},
+            ("coordinate_vnext_agent_turn",),
+        ),
+        ActionDefinition(
             "search_computer_knowledge", "检索计算机知识来源", "none", "explicit_or_auto",
             {},
             ("read_web_evidence",),
