@@ -279,19 +279,35 @@ async def test_embedding(
     if not base_url:
         base_url = app_settings.embedding_base_url or app_settings.llm_base_url
 
+    from app.services.embedding import redact_credentials, redacted_endpoint, resolve_api_model
+
+    model = req.model
+    if not model:
+        try:
+            model = resolve_api_model()
+        except RuntimeError as error:
+            raise HTTPException(400, str(error))
+
     try:
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         resp = await client.embeddings.create(
-            model=req.model or "text-embedding-ada-002",
+            model=model,
             input="test",
             timeout=60,
         )
         dims = len(resp.data[0].embedding)
         return {"status": "ok", "dimensions": dims}
     except Exception as e:
-        error_str = str(e)
+        # The provider's error text can echo the request URL, which may carry
+        # credentials as userinfo; keep it out of the response.
+        error_str = redact_credentials(e)
         if "404" in error_str:
-            raise HTTPException(400, "Embedding 端点不可用：该 API 可能不支持 embedding，建议使用 local 后端")
+            raise HTTPException(
+                400,
+                f"Embedding 端点不可用：{redacted_endpoint(base_url)} 可能不提供 embedding "
+                f"接口，或不认识模型 {model}。embedding 与对话是两种独立能力，"
+                "请确认该 provider 的 embedding 模型名，或改用其他 embedding 端点。",
+            )
         else:
             raise HTTPException(400, f"测试失败：{error_str[:200]}")
 

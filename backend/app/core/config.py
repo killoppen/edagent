@@ -152,10 +152,20 @@ class Settings(BaseSettings):
     role_package_launch_secret: str = Field(default="", repr=False)
 
     # Embedding
-    embedding_backend: str = "local"  # local | api
-    embedding_model: str = "text-embedding-ada-002"  # for api backend
+    embedding_backend: str = "auto"  # auto | local | api
+    # No portable default exists: an embedding model name only means something
+    # to one endpoint, and embeddings are a separate capability from chat, so a
+    # provider serving LLM_BASE_URL may not serve embeddings at all. Left empty
+    # the api backend resolves a default only for OpenAI's own endpoint.
+    embedding_model: str = ""
     embedding_api_key: str = ""  # separate from llm_api_key
     embedding_base_url: str = ""  # separate from llm_base_url (empty = use llm_base_url)
+    # Chunk embedding cache. The desktop sidecar overrides this because a frozen
+    # onefile bundle unpacks into a temporary directory that is deleted on exit.
+    embedding_cache_dir: str = Field(
+        default="data/embeddings",
+        validation_alias="EMBEDDING_CACHE_DIR",
+    )
 
     # CORS — stored as comma-separated in env, split at use
     cors_origins: str = "http://localhost:4174,http://127.0.0.1:4174"
