@@ -31,6 +31,21 @@ bash start.sh
 
 也可以在 `frontend/` 执行 `npm run dev`，它会检查并启动正式后端；只启动页面时使用 `npm run dev:web`。
 
+## 桌面安装包
+
+桌面端安装包发布在 GitHub 的 [Releases](https://github.com/killoppen/edagent/releases) 页面。维护者推送 `v*` 标签后，GitHub Actions 会在 Windows 和 macOS runner 上构建并上传安装包；也可以在 `Desktop release` workflow 中手动选择已有的 `v*` 标签重新发布。
+
+本地构建桌面安装包时，先完成 `desktop/README.md` 中的 Rust、Tauri、Python 和 Node.js 依赖安装，然后执行：
+
+```bash
+cd desktop
+npm install
+npm run build:sidecar
+npm run build
+```
+
+生成的安装包位于 `desktop/src-tauri/target/release/bundle/`，Windows 通常包含 `nsis/*.exe` 和 `msi/*.msi`。
+
 ## 目录
 
 ```text
