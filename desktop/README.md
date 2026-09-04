@@ -40,6 +40,15 @@ starts its bundled FastAPI sidecar on a random loopback port; it does not open
 the browser-based `start.sh` workflow. Existing app entries are moved to a
 timestamped `.backup-*` path instead of being deleted.
 
+On macOS, the default desktop pet shortcut is `Command+Option+P`. It is
+registered through the cross-platform Tauri shortcut service and can be
+changed in the pet settings. When the pet is visible, the shortcut opens the
+macOS interactive region capture; the selected PNG is kept in a randomly
+named temporary file only for the duration of the capture, then sent through
+the existing account vision provider and removed. macOS may ask for Screen
+Recording permission the first time this is used. If permission is denied,
+the normal image attachment flow remains available.
+
 ## Internal packages
 
 `.github/workflows/desktop-internal.yml` builds unsigned macOS and Windows

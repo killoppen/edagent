@@ -34,7 +34,7 @@ LearnFlow 是面向计算机学习的 Tutor 工作空间，包含：
 
 - `backend/app/services/architecture_registry.py`：注册表版本升至 `2026-09-03.3`，登记原生选区读取与视觉回退语义；
 - `backend/tests/test_architecture_registry.py`：同步注册表版本断言；
-- `desktop/src-tauri/src/lib.rs`：记录原前台窗口、优先系统复制、三次重试、剪贴板恢复和视觉回退；
+- `desktop/src-tauri/src/lib.rs`：按平台选择系统选区读取或交互式截图，并统一交给视觉回退链路；
 - `frontend/src/DesktopPet.tsx`：消费原生文本结果、紧凑模式响应快捷键、移除手动“截图文字 OCR”入口；
 - `docs/ARCHITECTURE_AUTHORITY.md`：补充 `2026-09-03.3` Contract impact；
 - `docs/AGENT_ARCHITECTURE_GUIDE.md`：补充桌宠选区读取契约说明。
@@ -99,7 +99,7 @@ LearnFlow 只有三类主责任接口：
 - Tauri 启动 sidecar 时生成桌面 token、随机 loopback 端口和独立应用数据目录。
 - sidecar 数据包括桌面数据库、`settings.env`、来源缓存、上传文件目录、插件制品目录和 `desktop-pet-settings.json`；这些目录不属于用户项目工作区。
 - pet 关闭事件被拦截为隐藏，重新打开时复用同一窗口；窗口位置与尺寸会持久化，并在无效显示器坐标时回退。
-- Windows 支持单实例唤醒、系统托盘、鼠标穿透恢复和全局快捷键监听。
+- Windows 和 macOS 支持系统托盘、鼠标穿透恢复和可配置的全局快捷键；Windows 额外支持单实例唤醒。
 
 ### 4.2 认证与权限
 
@@ -164,17 +164,15 @@ LearnFlow 只有三类主责任接口：
 
 ## 7. 选中文字识别工作流
 
-默认快捷键为 `Ctrl+Alt+P`，可在桌宠设置中切换为 `Ctrl+Shift+P` 或 `Alt+Shift+P`。
+默认快捷键按系统选择：macOS 为 `Command+Option+P`，其他桌面系统为 `Ctrl+Alt+P`；用户可在桌宠设置中切换可用组合。
 
 1. 桌宠隐藏时按快捷键：主窗口收到请求并打开桌宠；
-2. 桌宠可见时按快捷键：Tauri 记录触发瞬间的外部前台窗口句柄；
-3. 在隐藏的 PowerShell STA 进程中将焦点短暂交给目标窗口，最多三次发送 `Ctrl+C`；
-4. 通过剪贴板序列号和文本变化判断是否拿到新选区，并在结束时无条件恢复用户原剪贴板；
-5. 原生文本成功时直接返回可编辑文字，桌宠自动展开并提示“已从当前窗口直接读取”；
-6. 原生读取不到（例如不可复制、受保护或不响应快捷键）时，回退为目标窗口截图，再调用账户视觉模型 `/api/pet/selection-text`；
-7. 识别结果进入 `ocr_text` 临时上下文，仍需用户发送/确认后才随一个 Tutor 回合消费。
+2. 桌宠可见时按快捷键：Windows 优先读取当前窗口的原生选区文字；
+3. Windows 原生读取失败时，回退为目标窗口截图；macOS 使用系统交互式区域截图；
+4. 截图通过账户视觉模型调用 `/api/pet/selection-text`，不会依赖固定用户目录或固定窗口句柄；
+5. 识别结果进入 `ocr_text` 临时上下文，仍需用户发送/确认后才随一个 Tutor 回合消费。
 
-UI 已移除手动“截图文字 OCR”文件选择入口，用户只需在原应用选中文字后按快捷键。视觉回退仍受 12 MB 图片和 12,000 字上下文上限约束，长段落或特殊渲染文本的跨应用 GUI 回归尚未完成。
+UI 已移除手动“截图文字 OCR”文件选择入口，用户只需在原应用选中文字后按快捷键。macOS 首次使用需要授予应用“屏幕录制”权限；视觉回退仍受 12 MB 图片和 12,000 字上下文上限约束。
 
 ## 8. 关键代码入口
 

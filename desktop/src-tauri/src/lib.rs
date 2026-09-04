@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -7,39 +8,41 @@ use std::sync::Mutex;
 use std::thread;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewWindow, WindowEvent};
+use tauri::{
+    Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewWindow, WindowEvent,
+};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
+use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::ShellExt;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, HANDLE, ERROR_ALREADY_EXISTS, WAIT_OBJECT_0,
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, WAIT_OBJECT_0,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcessId, SetEvent, WaitForMultipleObjects, INFINITE,
 };
-use tauri_plugin_shell::process::CommandChild;
-use tauri_plugin_shell::ShellExt;
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_P,
-};
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, IsWindow, PeekMessageW, MSG, PM_REMOVE,
-    WM_HOTKEY,
-};
-
 const PET_TRAY_TOGGLE_ID: &str = "desktop-pet-toggle";
 const PET_TRAY_OPEN_MAIN_ID: &str = "desktop-pet-open-main";
 const PET_TRAY_DISABLE_MOUSE_THROUGH_ID: &str = "desktop-pet-disable-mouse-through";
 const PET_TRAY_QUIT_ID: &str = "desktop-pet-quit";
 const PET_REQUEST_EVENT: &str = "learnflow:desktop-pet-requested";
+#[cfg(target_os = "windows")]
 const INSTANCE_ACTIVATED_EVENT: &str = "learnflow:desktop-instance-activated";
 const PET_HIDDEN_EVENT: &str = "learnflow:desktop-pet-hidden";
-const PET_GLOBAL_SHORTCUT_LABEL: &str = "Ctrl+Alt+P";
 const PET_OCR_MAX_BYTES: u64 = 12 * 1024 * 1024;
-#[cfg(target_os = "windows")]
-const PET_GLOBAL_SHORTCUT_ID: i32 = 0x04f5;
+
+fn default_pet_shortcut() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "Command+Option+P"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl+Alt+P"
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,7 +78,7 @@ impl Default for DesktopPetPreferences {
         Self {
             schema_version: 1,
             appearance: "mist".into(),
-            shortcut: PET_GLOBAL_SHORTCUT_LABEL.into(),
+            shortcut: default_pet_shortcut().into(),
             review_reminders_enabled: false,
             review_reminder_interval_minutes: 30,
             mouse_through: false,
@@ -91,11 +94,8 @@ impl DesktopPetPreferences {
         if !matches!(self.appearance.as_str(), "mist" | "warm" | "dusk") {
             self.appearance = "mist".into();
         }
-        if !matches!(
-            self.shortcut.as_str(),
-            "Ctrl+Alt+P" | "Ctrl+Shift+P" | "Alt+Shift+P"
-        ) {
-            self.shortcut = PET_GLOBAL_SHORTCUT_LABEL.into();
+        if self.shortcut.trim().is_empty() || self.shortcut.parse::<Shortcut>().is_err() {
+            self.shortcut = default_pet_shortcut().into();
         }
         if !matches!(self.review_reminder_interval_minutes, 15 | 30 | 60) {
             self.review_reminder_interval_minutes = 30;
@@ -152,10 +152,6 @@ struct DesktopRuntimeState {
     pet_session_id: Mutex<Option<u64>>,
     pet_preferences: Mutex<DesktopPetPreferences>,
     pet_preferences_path: PathBuf,
-    #[cfg(target_os = "windows")]
-    pending_selection_window: Mutex<Option<isize>>,
-    #[cfg(target_os = "windows")]
-    last_external_foreground_window: Mutex<Option<isize>>,
 }
 
 #[tauri::command]
@@ -207,14 +203,22 @@ fn persist_desktop_pet_geometry(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn geometry_is_visible(window: &WebviewWindow, geometry: &DesktopPetGeometry) -> bool {
-    let right = geometry.x.saturating_add(geometry.width.min(i32::MAX as u32) as i32);
-    let bottom = geometry.y.saturating_add(geometry.height.min(i32::MAX as u32) as i32);
+    let right = geometry
+        .x
+        .saturating_add(geometry.width.min(i32::MAX as u32) as i32);
+    let bottom = geometry
+        .y
+        .saturating_add(geometry.height.min(i32::MAX as u32) as i32);
     window.available_monitors().ok().is_some_and(|monitors| {
         monitors.iter().any(|monitor| {
             let position = monitor.position();
             let size = monitor.size();
-            let monitor_right = position.x.saturating_add(size.width.min(i32::MAX as u32) as i32);
-            let monitor_bottom = position.y.saturating_add(size.height.min(i32::MAX as u32) as i32);
+            let monitor_right = position
+                .x
+                .saturating_add(size.width.min(i32::MAX as u32) as i32);
+            let monitor_bottom = position
+                .y
+                .saturating_add(size.height.min(i32::MAX as u32) as i32);
             geometry.x < monitor_right
                 && right > position.x
                 && geometry.y < monitor_bottom
@@ -242,7 +246,7 @@ fn bounded_ocr_text(raw: String) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn run_windows_foreground_capture(target_window: Option<isize>) -> Result<String, String> {
+fn capture_foreground_window_image(target_window: Option<isize>) -> Result<String, String> {
     const CAPTURE_SCRIPT: &str = r#"
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -283,10 +287,19 @@ try {
 }
 "#;
     let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", CAPTURE_SCRIPT])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            CAPTURE_SCRIPT,
+        ])
         .env(
             "LEARNFLOW_TARGET_HWND",
-            target_window.map(|value| value.to_string()).unwrap_or_default(),
+            target_window
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
         )
         .output()
         .map_err(|error| format!("无法启动桌面抓取：{error}"))?;
@@ -305,9 +318,41 @@ try {
     Ok(encoded)
 }
 
-#[cfg(not(target_os = "windows"))]
-fn run_windows_foreground_capture(_target_window: Option<isize>) -> Result<String, String> {
-    Err("当前系统未提供前台窗口抓取".into())
+#[cfg(target_os = "macos")]
+fn capture_selection_image() -> Result<String, String> {
+    let path =
+        std::env::temp_dir().join(format!("learnflow-selection-{}.png", uuid::Uuid::new_v4()));
+    let result = Command::new("screencapture")
+        .args(["-i", "-x"])
+        .arg(&path)
+        .output()
+        .map_err(|error| format!("无法启动 macOS 选区截图：{error}"))?;
+    if !result.status.success() {
+        let _ = std::fs::remove_file(&path);
+        return Err("macOS 选区截图未完成，请检查屏幕录制权限后重试".into());
+    }
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let _ = std::fs::remove_file(&path);
+            return Err(format!("无法读取 macOS 选区截图：{error}"));
+        }
+    };
+    let _ = std::fs::remove_file(&path);
+    if bytes.is_empty() || bytes.len() as u64 > PET_OCR_MAX_BYTES {
+        return Err("macOS 选区截图为空或超过大小限制".into());
+    }
+    Ok(BASE64.encode(bytes))
+}
+
+#[cfg(target_os = "windows")]
+fn capture_selection_image() -> Result<String, String> {
+    capture_foreground_window_image(None)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn capture_selection_image() -> Result<String, String> {
+    Err("当前系统暂未提供选区截图能力".into())
 }
 
 #[cfg(target_os = "windows")]
@@ -382,7 +427,9 @@ try {
         ])
         .env(
             "LEARNFLOW_TARGET_HWND",
-            target_window.map(|value| value.to_string()).unwrap_or_default(),
+            target_window
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
         )
         .output()
         .map_err(|error| format!("无法启动系统选区读取：{error}"))?;
@@ -393,13 +440,8 @@ try {
     Ok((!text.is_empty()).then_some(text))
 }
 
-#[cfg(not(target_os = "windows"))]
-fn run_windows_selection_text(_target_window: Option<isize>) -> Result<Option<String>, String> {
-    Ok(None)
-}
-
 #[cfg(target_os = "windows")]
-fn run_windows_ocr(path: &Path) -> Result<String, String> {
+fn run_local_ocr(path: &Path) -> Result<String, String> {
     const OCR_SCRIPT: &str = r#"
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 [void][Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
@@ -428,21 +470,21 @@ $result = Await-WinRt ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrR
         .args(["-NoProfile", "-NonInteractive", "-Command", OCR_SCRIPT])
         .env("LEARNFLOW_OCR_IMAGE_PATH", path)
         .output()
-        .map_err(|error| format!("无法启动 Windows OCR：{error}"))?;
+        .map_err(|error| format!("无法启动本机 OCR：{error}"))?;
     if !output.status.success() {
         let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if reason.is_empty() {
-            "Windows OCR 未能完成图片识别".into()
+            "本机 OCR 未能完成图片识别".into()
         } else {
-            format!("Windows OCR 未能完成图片识别：{reason}")
+            format!("本机 OCR 未能完成图片识别：{reason}")
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 #[cfg(not(target_os = "windows"))]
-fn run_windows_ocr(_path: &Path) -> Result<String, String> {
-    Err("当前系统未提供 Windows 本机 OCR".into())
+fn run_local_ocr(_path: &Path) -> Result<String, String> {
+    Err("当前系统未提供本机 OCR，请直接添加截图交给账户视觉模型识别".into())
 }
 
 #[tauri::command]
@@ -464,9 +506,7 @@ async fn capture_desktop_pet_ocr(
     let Some(file) = file else {
         return Ok(None);
     };
-    let path = file
-        .into_path()
-        .map_err(|_| "只能识别本机选择的截图文件")?;
+    let path = file.into_path().map_err(|_| "只能识别本机选择的截图文件")?;
     if !is_supported_ocr_image(&path) {
         return Err("截图仅支持 PNG、JPG、BMP 或 WebP 图片".into());
     }
@@ -475,9 +515,9 @@ async fn capture_desktop_pet_ocr(
         return Err("截图必须是小于 12 MB 的本机图片文件".into());
     }
     let path_for_ocr = path.clone();
-    let text = tauri::async_runtime::spawn_blocking(move || run_windows_ocr(&path_for_ocr))
+    let text = tauri::async_runtime::spawn_blocking(move || run_local_ocr(&path_for_ocr))
         .await
-        .map_err(|error| format!("Windows OCR 任务中断：{error}"))??;
+        .map_err(|error| format!("本机 OCR 任务中断：{error}"))??;
     let text = bounded_ocr_text(text);
     if text.is_empty() {
         return Err("未在截图中识别到可用文字".into());
@@ -498,7 +538,6 @@ async fn capture_desktop_pet_ocr(
 #[tauri::command]
 async fn capture_desktop_pet_selection(
     window: WebviewWindow,
-    state: tauri::State<'_, DesktopRuntimeState>,
 ) -> Result<DesktopPetSelectionCapture, String> {
     if window.label() != "pet" {
         return Err("只有桌宠可以抓取前台选区".into());
@@ -507,19 +546,11 @@ async fn capture_desktop_pet_selection(
         return Err("桌宠对话框未打开".into());
     }
     #[cfg(target_os = "windows")]
-    let target_window = state
-        .pending_selection_window
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.take());
+    let native_text = tauri::async_runtime::spawn_blocking(|| run_windows_selection_text(None))
+        .await
+        .map_err(|error| format!("系统选区读取任务中断：{error}"))??;
     #[cfg(not(target_os = "windows"))]
-    let target_window = None;
-    let native_text = tauri::async_runtime::spawn_blocking(move || {
-        run_windows_selection_text(target_window)
-    })
-    .await
-    .map_err(|error| format!("系统选区读取任务中断：{error}"))?
-    .unwrap_or(None);
+    let native_text: Option<String> = None;
     if let Some(text) = native_text {
         return Ok(DesktopPetSelectionCapture {
             image_base64: String::new(),
@@ -528,11 +559,17 @@ async fn capture_desktop_pet_selection(
             text: Some(text),
         });
     }
-    let image_base64 = tauri::async_runtime::spawn_blocking(move || {
-        run_windows_foreground_capture(target_window)
-    })
+    #[cfg(target_os = "macos")]
+    window.hide().map_err(|error| error.to_string())?;
+    let image_result = tauri::async_runtime::spawn_blocking(capture_selection_image)
         .await
-        .map_err(|error| format!("桌面抓取任务中断：{error}"))??;
+        .map_err(|error| format!("桌面抓取任务中断：{error}"));
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let image_base64 = image_result??;
     Ok(DesktopPetSelectionCapture {
         image_base64,
         mime_type: "image/png".into(),
@@ -566,6 +603,12 @@ fn update_desktop_pet_preferences(
     if window.label() != "pet" {
         return Err("该本机设置桥仅供桌宠窗口使用".into());
     }
+    let previous_shortcut = state
+        .pet_preferences
+        .lock()
+        .map_err(|_| "桌宠本机设置锁不可用")?
+        .shortcut
+        .clone();
     let preferences = {
         let mut preferences = state
             .pet_preferences
@@ -592,14 +635,24 @@ fn update_desktop_pet_preferences(
         preferences.normalize();
         preferences.clone()
     };
-    // 波浪一不提供系统托盘：鼠标穿透开关直接跟随持久化设置，
-    // 贴边隐藏（edge_auto_hide）仅持久化，由后续波次结合托盘/贴边实现。
+    if let Err(error) =
+        register_pet_global_shortcut(&app, &preferences.shortcut, Some(&previous_shortcut))
+    {
+        if let Ok(mut current) = state.pet_preferences.lock() {
+            current.shortcut = previous_shortcut;
+        }
+        return Err(error);
+    }
     window
         .set_ignore_cursor_events(preferences.mouse_through)
         .map_err(|error| error.to_string())?;
     persist_desktop_pet_preferences(&state)?;
-    app.emit_to("pet", "learnflow:desktop-pet-preferences-updated", &preferences)
-        .map_err(|error| error.to_string())?;
+    app.emit_to(
+        "pet",
+        "learnflow:desktop-pet-preferences-updated",
+        &preferences,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(preferences)
 }
 
@@ -693,10 +746,16 @@ fn disable_desktop_pet_mouse_through(app: &tauri::AppHandle) -> Result<(), Strin
     };
     persist_desktop_pet_preferences(&state)?;
     if let Some(window) = app.get_webview_window("pet") {
-        window.set_ignore_cursor_events(false).map_err(|error| error.to_string())?;
+        window
+            .set_ignore_cursor_events(false)
+            .map_err(|error| error.to_string())?;
     }
-    app.emit_to("pet", "learnflow:desktop-pet-preferences-updated", &preferences)
-        .map_err(|error| error.to_string())
+    app.emit_to(
+        "pet",
+        "learnflow:desktop-pet-preferences-updated",
+        &preferences,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn toggle_desktop_pet(app: &tauri::AppHandle) -> Result<(), String> {
@@ -711,30 +770,49 @@ fn toggle_desktop_pet(app: &tauri::AppHandle) -> Result<(), String> {
 fn configure_system_tray(app: &tauri::App) -> tauri::Result<()> {
     let toggle_pet = MenuItemBuilder::with_id(PET_TRAY_TOGGLE_ID, "显示 / 隐藏桌宠").build(app)?;
     let open_main = MenuItemBuilder::with_id(PET_TRAY_OPEN_MAIN_ID, "打开 LearnFlow").build(app)?;
-    let restore_mouse = MenuItemBuilder::with_id(PET_TRAY_DISABLE_MOUSE_THROUGH_ID, "恢复桌宠鼠标交互").build(app)?;
+    let restore_mouse =
+        MenuItemBuilder::with_id(PET_TRAY_DISABLE_MOUSE_THROUGH_ID, "恢复桌宠鼠标交互")
+            .build(app)?;
     let quit = MenuItemBuilder::with_id(PET_TRAY_QUIT_ID, "退出 LearnFlow").build(app)?;
     let menu = MenuBuilder::new(app)
         .items(&[&toggle_pet, &open_main, &restore_mouse])
         .separator()
         .item(&quit)
         .build()?;
-    let icon = app.default_window_icon().cloned()
+    let icon = app
+        .default_window_icon()
+        .cloned()
         .ok_or_else(|| tauri::Error::AssetNotFound("默认窗口图标不可用".into()))?;
     TrayIconBuilder::with_id("learnflow-desktop")
-        .tooltip(format!("LearnFlow 桌宠（{PET_GLOBAL_SHORTCUT_LABEL}）"))
+        .tooltip("LearnFlow 桌宠")
         .menu(&menu)
         .icon(icon)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            PET_TRAY_TOGGLE_ID => { let _ = toggle_desktop_pet(app); }
-            PET_TRAY_OPEN_MAIN_ID => { let _ = show_desktop_main(app); }
-            PET_TRAY_DISABLE_MOUSE_THROUGH_ID => { let _ = disable_desktop_pet_mouse_through(app); }
+            PET_TRAY_TOGGLE_ID => {
+                let _ = toggle_desktop_pet(app);
+            }
+            PET_TRAY_OPEN_MAIN_ID => {
+                let _ = show_desktop_main(app);
+            }
+            PET_TRAY_DISABLE_MOUSE_THROUGH_ID => {
+                let _ = disable_desktop_pet_mouse_through(app);
+            }
             PET_TRAY_QUIT_ID => app.exit(0),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
-                | TrayIconEvent::DoubleClick { button: MouseButton::Left, .. }) {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) {
                 let _ = toggle_desktop_pet(tray.app_handle());
             }
         })
@@ -752,21 +830,37 @@ struct SingleInstanceGuard {
 #[cfg(target_os = "windows")]
 impl SingleInstanceGuard {
     fn acquire() -> Result<Option<Self>, String> {
-        let name: Vec<u16> = "Local\\LearnFlowDesktopActivation-v1".encode_utf16().chain(std::iter::once(0)).collect();
+        let name: Vec<u16> = "Local\\LearnFlowDesktopActivation-v1"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let activation_event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
         if activation_event.is_null() {
-            return Err(format!("无法创建 LearnFlow 单实例事件：{}", unsafe { GetLastError() }));
+            return Err(format!("无法创建 LearnFlow 单实例事件：{}", unsafe {
+                GetLastError()
+            }));
         }
         if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-            unsafe { SetEvent(activation_event); CloseHandle(activation_event); }
+            unsafe {
+                SetEvent(activation_event);
+                CloseHandle(activation_event);
+            }
             return Ok(None);
         }
         let shutdown_event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
         if shutdown_event.is_null() {
-            unsafe { CloseHandle(activation_event); }
-            return Err(format!("无法创建 LearnFlow 退出事件：{}", unsafe { GetLastError() }));
+            unsafe {
+                CloseHandle(activation_event);
+            }
+            return Err(format!("无法创建 LearnFlow 退出事件：{}", unsafe {
+                GetLastError()
+            }));
         }
-        Ok(Some(Self { activation_event, shutdown_event, listener: None }))
+        Ok(Some(Self {
+            activation_event,
+            shutdown_event,
+            listener: None,
+        }))
     }
 
     fn start(&mut self, app: tauri::AppHandle) {
@@ -775,11 +869,15 @@ impl SingleInstanceGuard {
         self.listener = Some(thread::spawn(move || {
             let handles = [activation_event as HANDLE, shutdown_event as HANDLE];
             loop {
-                let signaled = unsafe { WaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), 0, INFINITE) };
+                let signaled = unsafe {
+                    WaitForMultipleObjects(handles.len() as u32, handles.as_ptr(), 0, INFINITE)
+                };
                 if signaled == WAIT_OBJECT_0 {
                     let _ = show_desktop_main(&app);
                     let _ = app.emit_to("main", INSTANCE_ACTIVATED_EVENT, ());
-                } else { break; }
+                } else {
+                    break;
+                }
             }
         }));
     }
@@ -788,9 +886,16 @@ impl SingleInstanceGuard {
 #[cfg(target_os = "windows")]
 impl Drop for SingleInstanceGuard {
     fn drop(&mut self) {
-        unsafe { SetEvent(self.shutdown_event); }
-        if let Some(listener) = self.listener.take() { let _ = listener.join(); }
-        unsafe { CloseHandle(self.activation_event); CloseHandle(self.shutdown_event); }
+        unsafe {
+            SetEvent(self.shutdown_event);
+        }
+        if let Some(listener) = self.listener.take() {
+            let _ = listener.join();
+        }
+        unsafe {
+            CloseHandle(self.activation_event);
+            CloseHandle(self.shutdown_event);
+        }
     }
 }
 
@@ -801,15 +906,24 @@ fn request_desktop_pet_selection_capture(app: &tauri::AppHandle) -> Result<(), S
     if !window.is_visible().map_err(|error| error.to_string())? {
         return Ok(());
     }
-    app.emit_to("pet", "learnflow:desktop-pet-selection-capture-requested", ())
-        .map_err(|error| error.to_string())
+    app.emit_to(
+        "pet",
+        "learnflow:desktop-pet-selection-capture-requested",
+        (),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn allowed_main_path(path: &str) -> bool {
     if matches!(path, "/tasks" | "/review" | "/learning-files") {
         return true;
     }
-    for prefix in ["/chat/", "/projects/", "/files/lecture/", "/files/practice/"] {
+    for prefix in [
+        "/chat/",
+        "/projects/",
+        "/files/lecture/",
+        "/files/practice/",
+    ] {
         let Some(value) = path.strip_prefix(prefix) else {
             continue;
         };
@@ -844,7 +958,7 @@ fn open_desktop_main_path(
         "learnflow:desktop-pet-navigate",
         DesktopPetNavigation { request_id, path },
     )
-        .map_err(|error| error.to_string())?;
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -861,7 +975,10 @@ fn store_desktop_pet_capability(
     if token.trim().is_empty() {
         return Err("桌宠受限身份不能为空".into());
     }
-    *state.pet_capability_token.lock().map_err(|_| "桌宠身份锁不可用")? = Some(token);
+    *state
+        .pet_capability_token
+        .lock()
+        .map_err(|_| "桌宠身份锁不可用")? = Some(token);
     app.emit("learnflow:pet-identity-updated", ())
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -880,7 +997,10 @@ fn sync_desktop_pet_session(
     if session_id == Some(0) {
         return Err("正式 Tutor 会话标识无效".into());
     }
-    *state.pet_session_id.lock().map_err(|_| "桌宠会话锁不可用")? = session_id;
+    *state
+        .pet_session_id
+        .lock()
+        .map_err(|_| "桌宠会话锁不可用")? = session_id;
     if app.get_webview_window("pet").is_some() {
         app.emit_to("pet", "learnflow:desktop-pet-session-updated", session_id)
             .map_err(|error| error.to_string())?;
@@ -896,7 +1016,8 @@ fn desktop_pet_active_session(
     if window.label() != "pet" {
         return Err("该会话桥仅供桌宠窗口使用".into());
     }
-    state.pet_session_id
+    state
+        .pet_session_id
         .lock()
         .map_err(|_| "桌宠会话锁不可用".to_string())
         .map(|session_id| *session_id)
@@ -911,8 +1032,14 @@ fn clear_desktop_auth_token(
     if window.label() != "main" {
         return Err("只有主窗口可以清除桌面身份".into());
     }
-    *state.pet_capability_token.lock().map_err(|_| "桌宠身份锁不可用")? = None;
-    *state.pet_session_id.lock().map_err(|_| "桌宠会话锁不可用")? = None;
+    *state
+        .pet_capability_token
+        .lock()
+        .map_err(|_| "桌宠身份锁不可用")? = None;
+    *state
+        .pet_session_id
+        .lock()
+        .map_err(|_| "桌宠会话锁不可用")? = None;
     if let Some(pet_window) = app.get_webview_window("pet") {
         persist_desktop_pet_geometry(&app)?;
         pet_window.hide().map_err(|error| error.to_string())?;
@@ -923,27 +1050,21 @@ fn clear_desktop_auth_token(
 }
 
 #[tauri::command]
-fn desktop_pet_auth_token(window: WebviewWindow, state: tauri::State<'_, DesktopRuntimeState>) -> Result<String, String> {
+fn desktop_pet_auth_token(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopRuntimeState>,
+) -> Result<String, String> {
     if window.label() != "pet" {
         return Err("该身份桥仅供桌宠窗口使用".into());
     }
-    state.pet_capability_token
+    state
+        .pet_capability_token
         .lock()
         .map_err(|_| "桌面身份锁不可用")?
         .clone()
         .ok_or_else(|| "请先在 LearnFlow 主窗口登录以授权桌宠".into())
 }
 
-#[cfg(target_os = "windows")]
-fn pet_shortcut_spec(shortcut: &str) -> u32 {
-    match shortcut {
-        "Ctrl+Shift+P" => MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT,
-        "Alt+Shift+P" => MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
-        _ => MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-    }
-}
-
-#[cfg(target_os = "windows")]
 fn handle_desktop_pet_global_shortcut(app: &tauri::AppHandle) {
     // 快捷键路由：桌宠可见（处于激活态）时把当前系统前台窗口的高亮文字
     // 抓给桌宠转写；桌宠尚未打开时则请求主窗口展示桌宠。
@@ -952,85 +1073,35 @@ fn handle_desktop_pet_global_shortcut(app: &tauri::AppHandle) {
         .and_then(|window| window.is_visible().ok())
         .unwrap_or(false);
     if pet_visible {
-        let foreground_window = unsafe { GetForegroundWindow() };
-        let process_id = unsafe { GetCurrentProcessId() };
-        let mut foreground_process_id = 0;
-        let external_window = if !foreground_window.is_null()
-            && unsafe { GetWindowThreadProcessId(foreground_window, &mut foreground_process_id) } != 0
-            && foreground_process_id != process_id
-        {
-            Some(foreground_window as isize)
-        } else {
-            app.state::<DesktopRuntimeState>()
-                .last_external_foreground_window
-                .lock()
-                .ok()
-                .and_then(|window| window.filter(|value| unsafe { IsWindow(*value as _) } != 0))
-        };
-        if let Some(external_window) = external_window {
-            if let Ok(mut pending) = app.state::<DesktopRuntimeState>().pending_selection_window.lock() {
-                *pending = Some(external_window);
-            }
-        }
         let _ = request_desktop_pet_selection_capture(app);
     } else {
         let _ = request_desktop_pet(app);
     }
 }
 
-#[cfg(target_os = "windows")]
-fn start_pet_global_shortcut_listener(app: tauri::AppHandle) {
-    let _ = thread::Builder::new()
-        .name("learnflow-pet-shortcut".into())
-        .spawn(move || unsafe {
-            let mut requested_shortcut = String::new();
-            let mut registered = false;
-            let mut message = MSG::default();
-            loop {
-                let shortcut = app
-                    .state::<DesktopRuntimeState>()
-                    .pet_preferences
-                    .lock()
-                    .map(|preferences| preferences.shortcut.clone())
-                    .unwrap_or_else(|_| PET_GLOBAL_SHORTCUT_LABEL.into());
-                if shortcut != requested_shortcut {
-                    if registered {
-                        UnregisterHotKey(std::ptr::null_mut(), PET_GLOBAL_SHORTCUT_ID);
-                    }
-                    requested_shortcut = shortcut;
-                    registered = RegisterHotKey(
-                        std::ptr::null_mut(),
-                        PET_GLOBAL_SHORTCUT_ID,
-                        pet_shortcut_spec(&requested_shortcut),
-                        VK_P as u32,
-                    ) != 0;
-                    if !registered {
-                        eprintln!("LearnFlow 无法注册全局快捷键 {requested_shortcut}");
-                    }
-                }
-                while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-                    if message.message == WM_HOTKEY && message.wParam == PET_GLOBAL_SHORTCUT_ID as usize {
-                        handle_desktop_pet_global_shortcut(&app);
-                    }
-                }
-                let foreground_window = GetForegroundWindow();
-                if !foreground_window.is_null() {
-                    let mut foreground_process_id = 0;
-                    if GetWindowThreadProcessId(foreground_window, &mut foreground_process_id) != 0
-                        && foreground_process_id != GetCurrentProcessId()
-                    {
-                        if let Ok(mut last_external) = app
-                            .state::<DesktopRuntimeState>()
-                            .last_external_foreground_window
-                            .lock()
-                        {
-                            *last_external = Some(foreground_window as isize);
-                        }
-                    }
-                }
-                thread::sleep(std::time::Duration::from_millis(120));
+fn register_pet_global_shortcut(
+    app: &tauri::AppHandle,
+    label: &str,
+    previous_label: Option<&str>,
+) -> Result<(), String> {
+    let shortcut: Shortcut = label
+        .parse()
+        .map_err(|error| format!("桌宠快捷键格式无效：{error}"))?;
+    let manager = app.global_shortcut();
+    manager
+        .unregister_all()
+        .map_err(|error| format!("无法更新桌宠快捷键：{error}"))?;
+    if let Err(error) = manager.register(shortcut) {
+        if let Some(previous) = previous_label {
+            if let Ok(previous_shortcut) = previous.parse::<Shortcut>() {
+                let _ = manager.register(previous_shortcut);
             }
-        });
+        }
+        return Err(format!(
+            "无法注册桌宠快捷键 {label}，可能已被其他应用占用：{error}"
+        ));
+    }
+    Ok(())
 }
 
 fn reserve_loopback_port() -> u16 {
@@ -1053,6 +1124,15 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event: ShortcutEvent| {
+                    if event.state == ShortcutState::Pressed {
+                        handle_desktop_pet_global_shortcut(app);
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
@@ -1126,11 +1206,15 @@ pub fn run() {
                 pet_session_id: Mutex::new(None),
                 pet_preferences: Mutex::new(pet_preferences),
                 pet_preferences_path,
-                #[cfg(target_os = "windows")]
-                pending_selection_window: Mutex::new(None),
-                #[cfg(target_os = "windows")]
-                last_external_foreground_window: Mutex::new(None),
             });
+            let shortcut = app
+                .state::<DesktopRuntimeState>()
+                .pet_preferences
+                .lock()
+                .map_err(|_| "桌宠设置锁不可用")?
+                .shortcut
+                .clone();
+            register_pet_global_shortcut(&app.handle(), &shortcut, None)?;
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -1139,32 +1223,26 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     single_instance.start(app.handle().clone());
 
-    app.run(|handle, event| {
-        match event {
-            #[cfg(target_os = "windows")]
-            RunEvent::Ready => {
-                start_pet_global_shortcut_listener(handle.clone());
-            }
-            RunEvent::WindowEvent {
-                label,
-                event: WindowEvent::CloseRequested { api, .. },
-                ..
-            } if label == "pet" => {
-                api.prevent_close();
-                let _ = hide_desktop_pet(handle);
-            }
-            RunEvent::ExitRequested { .. } | RunEvent::Exit => {
-                if let Some(child) = handle
-                    .state::<DesktopRuntimeState>()
-                    .sidecar
-                    .lock()
-                    .expect("sidecar lock poisoned")
-                    .take()
-                {
-                    let _ = child.kill();
-                }
-            }
-            _ => {}
+    app.run(|handle, event| match event {
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "pet" => {
+            api.prevent_close();
+            let _ = hide_desktop_pet(handle);
         }
+        RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+            if let Some(child) = handle
+                .state::<DesktopRuntimeState>()
+                .sidecar
+                .lock()
+                .expect("sidecar lock poisoned")
+                .take()
+            {
+                let _ = child.kill();
+            }
+        }
+        _ => {}
     });
 }

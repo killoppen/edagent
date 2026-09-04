@@ -1,5 +1,11 @@
 # LearnFlow 智能体架构与协作指南
 
+Contract impact（`2026-09-04.1`）：桌宠选区入口继续由 `tutor_agent` 的
+`desktop_pet_gateway` 所有。全局快捷键改由跨平台 Tauri 服务按桌宠偏好注册；Windows
+保留原生可复制文本优先路径，macOS 使用系统交互式区域截图，截图仅在一次性临时文件中
+短暂存在并交给账户视觉模型。两条路径都只产生用户确认前的 TTL 临时上下文，不写
+`AgentMessage` 正文、`EvidenceEvent`、五核或长期记忆。
+
 Contract impact（`2026-09-03.3`）：桌宠选中文本入口仍由 `tutor_agent` 的 `desktop_pet_gateway` 所有。Windows 快捷键触发时先固定原前台窗口，优先本机读取用户主动选中的 Unicode 文本并恢复剪贴板；不可复制时才回退到原有前台截图和账户视觉模型。两条路径都只产生可编辑、TTL 限时的临时上下文，须用户发送后才消费一个正式 Tutor 回合，不写 AgentMessage 正文、EvidenceEvent、五核或长期记忆；快捷键、capability、API 和视觉回退保持向后兼容。
 
 Contract impact（`2026-09-03.2`）：桌宠视觉适配器使用当前账户的视觉模型配置：可独立保存加密视觉凭据，或显式回退同一账户的 Tutor 凭据；Base URL 与模型名称按账户保存。两类密钥使用不同 AAD 用途，桌宠 capability 不能读取凭据。截图仍须用户主动提供、确认并只随一个正式 Tutor 回合消费，视觉观察不构成掌握、评分、策略或五核证据。
