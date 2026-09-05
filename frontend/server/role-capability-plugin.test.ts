@@ -338,3 +338,12 @@ test('role object cards keep the source workspace lane interaction inside the pl
   assert.match(cssSource, /flex-basis:292px/)
   assert.match(cssSource, /max-height:min\(68vh,720px\)/)
 })
+
+test('role product links use the desktop external URL bridge', () => {
+  const clientSource = readFileSync(resolve(process.cwd(), 'plugins/role_capability_graph/client.tsx'), 'utf8')
+  const desktopSource = readFileSync(resolve(process.cwd(), '../desktop/src-tauri/src/lib.rs'), 'utf8')
+  assert.match(clientSource, /openExternalProductLink/)
+  assert.match(clientSource, /invoke\('open_external_url'/)
+  assert.match(desktopSource, /fn open_external_url/)
+  assert.match(desktopSource, /starts_with\("http:\/\/"\) \|\| value\.starts_with\("https:\/\/"\)/)
+})
