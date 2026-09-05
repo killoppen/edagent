@@ -103,6 +103,30 @@ test('graph hub recommendation exposes an unreviewed personal graph only to its 
   }
 })
 
+test('graph hub recommendation uses the checked-in development catalog when no catalog is configured', async () => {
+  const previousCatalog = process.env.LEARNFLOW_GRAPH_HUB_CATALOG
+  const previousRoot = process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT
+  const previousNodeEnv = process.env.NODE_ENV
+  delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG
+  delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT
+  process.env.NODE_ENV = 'test'
+  try {
+    const loaded = await registry()
+    const result = await loaded.execute('role_capability_graph__search_graph_hub', {
+      query: '大模型应用工程师', topK: 3,
+    }, executionContext)
+    assert.equal((result.result.payload as any).recommendations.length, 1)
+    assert.equal((result.result.payload as any).recommendations[0].graphId, 'learnflow:built-in-llm-app-engineer')
+  } finally {
+    if (previousCatalog === undefined) delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG
+    else process.env.LEARNFLOW_GRAPH_HUB_CATALOG = previousCatalog
+    if (previousRoot === undefined) delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT
+    else process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT = previousRoot
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousNodeEnv
+  }
+})
+
 test('package catalog filters by requested role and hands unmatched roles to Role Atlas', async () => {
   const loaded = await registry()
   const matched = await loaded.execute('role_capability_graph__list_role_packages', {

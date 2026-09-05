@@ -8,6 +8,7 @@ import {
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 const { packageSelector, rolePackageRuntime } = await import(
   versionedPluginModuleUrl('./runtime.ts', import.meta.url)
 ) as typeof import('./runtime.ts')
@@ -21,6 +22,8 @@ const { graphHubSubject, recommendGraphHubEntries } = await import(
   versionedPluginModuleUrl('./graph-hub.ts', import.meta.url)
 ) as typeof import('./graph-hub.ts')
 
+const BUILTIN_GRAPH_HUB_CATALOG = fileURLToPath(new URL('./graph-hub.catalog.json', import.meta.url))
+
 function scopedGraphHubCatalog(learnerId?: number) {
   const subject = graphHubSubject(learnerId)
   const rootValue = String(process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT || '').trim()
@@ -33,7 +36,10 @@ function scopedGraphHubCatalog(learnerId?: number) {
     if (existsSync(publicCatalog)) return { catalogFile: publicCatalog, subject }
   }
   const catalogFile = String(process.env.LEARNFLOW_GRAPH_HUB_CATALOG || '').trim()
-  if (!catalogFile) throw new Error('graph_hub_not_configured:LEARNFLOW_GRAPH_HUB_CATALOG_ROOT')
+  if (!catalogFile) {
+    if (process.env.NODE_ENV === 'production') throw new Error('graph_hub_not_configured:LEARNFLOW_GRAPH_HUB_CATALOG_ROOT')
+    return { catalogFile: BUILTIN_GRAPH_HUB_CATALOG, subject }
+  }
   return { catalogFile, subject }
 }
 
