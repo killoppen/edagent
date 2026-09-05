@@ -92,6 +92,7 @@ test('graph hub recommendation exposes an unreviewed personal graph only to its 
     assert.equal((owner.result.payload as any).recommendations.length, 1)
     assert.equal((owner.result.payload as any).recommendations[0].review, 'pending_owner')
     assert.equal(owner.result.objects?.[0].objectType, 'graph_recommendation')
+    assert.equal(owner.result.presentation?.renderer, 'role_capability_graph:graph_hub_recommendation')
     assert.match(String((owner.result.payload as any).boundary), /不写学习路径、EvidenceEvent 或五核/)
 
     await assert.rejects(loaded.execute('role_capability_graph__search_graph_hub', {

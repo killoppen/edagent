@@ -121,7 +121,7 @@ client.tsx      renderer components，导出 default 或 plugin
 - 十三个只读 Tool；`search_graph_hub` 负责按学习目标检索官方图、已审核个人图和所有者自己的未审核图，`list_role_packages -> reference_role_package` 负责用户明确选择与不可变引用，`research_role_node_risks` 只为解释节点证据、关系和事理风险；
 - 一个证据化岗位图谱阅读 Agent Skill；
 - 五类已发布岗位对象，加一类岗位包引用 Object 和一类只读节点风险解释 Object；
-- 十一个 ToolResult Renderer，包括岗位包目录、岗位包引用和节点风险研究。
+- 十二个 ToolResult Renderer，包括图谱推荐、岗位包目录、岗位包引用和节点风险研究。
 
 Graph Hub 目录使用 `graph-hub-catalog.v1`。所有者作用域目录必须带 `audienceSubjectId=learnflow:learner:<id>`；宿主从正式学习者上下文把 `learnerId` 注入通用 Plugin Tool scope，插件据此校验目录，模型 schema 不包含 owner 参数。未审核个人图不得出现在公共目录，也不得在其他学习者的调用中降级为匿名可见。`LEARNFLOW_GRAPH_HUB_CATALOG` 指向公共目录或当前学习者作用域目录；工具最多返回 10 个图、每图 6 个命中节点，并显式返回 omitted/truncated。开发环境未配置目录时使用插件内置的公开种子目录，生产环境仍要求显式目录配置。检索结果是只读推荐，不写学习路径、Plugin 持久化权威、EvidenceEvent 或五核。
 

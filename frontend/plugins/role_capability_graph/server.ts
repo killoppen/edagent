@@ -123,7 +123,7 @@ const plugin = defineLearnFlowPlugin({
           },
           required: ['query'], additionalProperties: false,
         },
-        outputObjectTypes: ['graph_recommendation'], availableInModes: ['free', 'simple_explain', 'guided_learning', 'learning_plan'],
+        outputObjectTypes: ['graph_recommendation'], availableInModes: ['free', 'simple_explain', 'guided_learning', 'learning_plan'], renderer: ROLE_RENDERERS.graphHub,
       },
       {
         id: 'explore_role', title: '读取岗位全景', description: '一次返回岗位定位、典型任务、核心能力、工作场景、相邻岗位和可引用事实合同，避免为岗位概览连续调用多个细粒度工具。',
@@ -281,6 +281,7 @@ const plugin = defineLearnFlowPlugin({
       { id: ROLE_RENDERERS.catalog, title: '岗位包目录', description: '显示当前可引用岗位包、来源范围、版本与固定快照，并让用户发起精确选择。' },
       { id: ROLE_RENDERERS.packageReference, title: '岗位包引用', description: '显示用户已选择并固定到当前 ToolRun 的岗位包身份。' },
       { id: ROLE_RENDERERS.comparison, title: '岗位版本比较', description: '显示两个固定快照之间的对象和引用迁移差异。' },
+      { id: ROLE_RENDERERS.graphHub, title: '图谱推荐', description: '按图谱类型筛选推荐结果，查看命中节点与可见范围。' },
     ],
   },
   handlers: {

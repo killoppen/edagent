@@ -586,6 +586,47 @@ function AuditPanel(props: PluginToolRendererProps) {
   )
 }
 
+const GRAPH_TYPE_LABELS: Record<string, string> = {
+  learning_path: '学习路径', role_semantic: '岗位语义', role_process: '工作过程', knowledge: '知识图谱', custom: '自定义图谱',
+}
+
+function GraphHubRecommendation(props: PluginToolRendererProps) {
+  const payload = (props.result.payload || {}) as RecordValue
+  const recommendations = useMemo(() => {
+    const values = Array.isArray(payload.recommendations) && payload.recommendations.length
+      ? payload.recommendations
+      : props.objects.map(object => object.value as RecordValue)
+    return values.filter(value => value && typeof value === 'object')
+  }, [payload.recommendations, props.objects])
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [textFilter, setTextFilter] = useState('')
+  const types = useMemo(() => [...new Set(recommendations.map(item => String(item.graphType || 'custom')))], [recommendations])
+  const filtered = useMemo(() => {
+    const query = textFilter.trim().toLocaleLowerCase()
+    return recommendations.filter(item => {
+      if (typeFilter !== 'all' && String(item.graphType) !== typeFilter) return false
+      if (!query) return true
+      return [item.title, item.summary, ...(Array.isArray(item.keywords) ? item.keywords : []), ...(Array.isArray(item.matchedNodes) ? item.matchedNodes.flatMap((node: RecordValue) => [node.label, node.summary]) : [])]
+        .join(' ').toLocaleLowerCase().includes(query)
+    })
+  }, [recommendations, textFilter, typeFilter])
+  return <section className="role-plugin-view role-plugin-hub" aria-label="图谱推荐结果">
+    <header className="role-plugin-hub-header"><div><span>GRAPH HUB</span><strong>图谱推荐</strong><small>{String(payload.query || '')}</small></div><label>筛选结果<input value={textFilter} onChange={event => setTextFilter(event.target.value)} placeholder="按名称或节点筛选" /></label></header>
+    <nav className="role-plugin-hub-filters" aria-label="图谱类型筛选">
+      <button type="button" aria-pressed={typeFilter === 'all'} onClick={() => setTypeFilter('all')}>全部 <b>{recommendations.length}</b></button>
+      {types.map(type => <button type="button" key={type} aria-pressed={typeFilter === type} onClick={() => setTypeFilter(type)}>{GRAPH_TYPE_LABELS[type] || type} <b>{recommendations.filter(item => String(item.graphType) === type).length}</b></button>)}
+    </nav>
+    {filtered.length ? <div className="role-plugin-hub-grid">{filtered.map(item => <article key={`${String(item.graphId)}@${String(item.graphVersion)}`}>
+      <header><span>{GRAPH_TYPE_LABELS[String(item.graphType)] || String(item.graphType || '自定义图谱')}</span><strong>{String(item.title || '未命名图谱')}</strong><small>匹配度 {String(item.score ?? '—')}</small></header>
+      <p>{String(item.summary || '暂无图谱简介。')}</p>
+      <div className="role-plugin-hub-meta"><span>{item.review === 'official' ? '官方' : item.review === 'approved' ? '已审核' : '主体可见'}</span><span>{item.access === 'owner' ? '仅所有者' : '公开可见'}</span><code>{String(item.graphId || '')}@{String(item.graphVersion || '')}</code></div>
+      {Array.isArray(item.matchedNodes) && item.matchedNodes.length > 0 && <details><summary>命中节点 {item.matchedNodes.length}</summary><ul>{item.matchedNodes.map((node: RecordValue) => <li key={String(node.id)}><strong>{String(node.label || node.id)}</strong><small>{String(node.summary || '')}</small></li>)}</ul></details>}
+      {props.onPrompt && <button type="button" onClick={() => props.onPrompt?.(`继续围绕图谱“${String(item.title || '')}”检索相关学习内容`)}>继续检索</button>}
+    </article>)}</div> : <p className="role-plugin-card-empty">没有匹配当前筛选条件的图谱。</p>}
+    <footer className="role-plugin-hub-footer">当前可见 {String(payload.coverage?.visibleGraphs ?? recommendations.length)} 个图谱 · 返回 {filtered.length} 个 · 结果仅用于发现，不会自动引用或修改图谱。</footer>
+  </section>
+}
+
 const plugin = defineLearnFlowPluginClient({
   pluginId: ROLE_CAPABILITY_PLUGIN.id,
   name: ROLE_CAPABILITY_PLUGIN.name,
@@ -603,6 +644,7 @@ const plugin = defineLearnFlowPluginClient({
     [ROLE_RENDERERS.packageReference]: PackageReference,
     [ROLE_RENDERERS.comparison]: PackageComparison,
     [ROLE_RENDERERS.nodeRisk]: NodeRiskResearch,
+    [ROLE_RENDERERS.graphHub]: GraphHubRecommendation,
   },
 })
 

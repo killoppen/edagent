@@ -31,4 +31,5 @@ export const ROLE_RENDERERS = {
   packageReference: 'role_package_reference',
   comparison: 'role_package_comparison',
   nodeRisk: 'role_node_risk_research',
+  graphHub: 'graph_hub_recommendation',
 } as const
