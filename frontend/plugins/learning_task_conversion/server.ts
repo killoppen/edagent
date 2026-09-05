@@ -5,6 +5,7 @@ import {
   type PluginJsonSchema,
 } from '../../src/plugin-api.ts'
 import { learningTaskConversionRuntime } from './runtime.ts'
+import { listLocalWorkCases, prepareLocalWorkCase, validateLocalWorkCaseCandidate, WORK_CASE_CANDIDATE_SCHEMA } from './work-case.ts'
 import { LEARNING_TASK_INTAKE_SCHEMA_VERSION } from './intake.ts'
 import {
   LEARNING_TASK_CONVERSION_PLUGIN,
@@ -93,6 +94,12 @@ const plugin = defineLearnFlowPlugin({
     defaultEnabled: false,
     objects: [
       {
+        type: 'work_case_candidate', title: '本地工作案例候选', description: '完整案例保存在宿主，候选只固定版本与内容哈希，确认后才物化项目路线。',
+        schemaVersion: WORK_CASE_CANDIDATE_SCHEMA,
+        schema: objectSchema({ case_id: { type: 'string' }, case_version: { type: 'string' }, case_root_hash: { type: 'string' }, title: { type: 'string' }, summary: { type: 'string' }, project_mode: { type: 'string' } }, ['case_id', 'case_version', 'case_root_hash', 'title', 'summary', 'project_mode']),
+        validate: value => { try { validateLocalWorkCaseCandidate(value); return [] } catch { return ['invalid immutable local case selector'] } },
+      },
+      {
         type: 'learning_task_intake', title: '学习型任务转化准备单',
         description: '在调用讯飞前完成输入层级判断、原文锚定、任务选择和显式确认。',
         schemaVersion: LEARNING_TASK_INTAKE_SCHEMA_VERSION, schema: intakeSchema,
@@ -148,6 +155,20 @@ const plugin = defineLearnFlowPlugin({
       },
     ],
     tools: [
+      {
+        id: 'list_local_work_cases', title: '查找本地工作案例', description: '读取宿主可用的版本化教学案例目录，不运行外部生成服务。',
+        whenToUse: '学生希望体验本地工作案例或开始实践型项目时先查看可用案例。', whenNotToUse: '已经在具体案例阶段中工作时不重复查询目录。',
+        toolClass: 'perception', risk: 'read_only', requiresProject: true,
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false }, outputObjectTypes: [],
+        availableInModes: ['free', 'simple_explain', 'guided_learning', 'learning_plan'],
+      },
+      {
+        id: 'prepare_local_work_case', title: '校验本地工作案例', description: '将目录原样返回的案例ID、版本、hash交给宿主校验，返回等待用户在项目工作台确认的候选。',
+        whenToUse: '学生选择一个目录中的案例，准备建立实践项目时。', whenNotToUse: '没有目录返回的精确版本/hash时禁止猜测；不能代替学生确认或直接推进关卡。',
+        toolClass: 'execution', risk: 'artifact', requiresProject: true, renderer: 'work_case_candidate',
+        inputSchema: objectSchema({ caseId: { type: 'string' }, version: { type: 'string' }, rootHash: { type: 'string', minLength: 64, maxLength: 64 } }, ['caseId', 'version', 'rootHash']),
+        outputObjectTypes: ['work_case_candidate'], availableInModes: ['free', 'simple_explain', 'guided_learning', 'learning_plan'],
+      },
       {
         id: 'prepare_learning_task_intake', title: '准备学习型任务转化',
         description: '接收宿主独立语义模型的层级判断，并在本地校验原文锚点，返回待选择或待确认准备单；不调用讯飞。',
@@ -262,7 +283,8 @@ const plugin = defineLearnFlowPlugin({
       whenToUse: '用户要求把具体工作任务转成可执行学习步骤、任务工单或学习型工作任务。',
       whenNotToUse: '用户只是问概念、要求评分、修改掌握状态或尚未给出可执行任务时。',
       instructions: [
-        '任何新的转化请求第一步都调用 learning_task_conversion__prepare_learning_task_intake。本工具只返回可检查准备单，不调用讯飞；返回后本轮必须停止工具链并让用户选择或确认，严禁同一轮继续 draft_learning_task。',
+        '用户选择本地案例路线时，先list_local_work_cases，再用目录返回的精确caseId/version/rootHash调用prepare_local_work_case。完整材料由宿主按阶段读取，不压缩进讯飞500字符输入，不向模型释放未来事件。返回候选后指导用户在项目工作台确认开始。',
+        '新的自由文本工作任务转化请求，第一步调用 learning_task_conversion__prepare_learning_task_intake。本工具只返回可检查准备单，不调用讯飞；返回后本轮必须停止工具链并让用户选择或确认，严禁同一轮继续 draft_learning_task。',
         '岗位或职业输入先给出其下的单个企业典型工作任务候选；优先使用已引用岗位包或项目来源，数据库没有时可给 model_proposed 候选，但必须保留用户原始领域词并标明待确认。学习方向和知识主题不得自动替换成相似岗位。',
         '只有准备单为 ready_for_confirmation 且用户在后续一轮明确确认时，才可把准备单的 originalInput、intakeId、intakeRootHash、taskContract 和 source 原样传给 draft_learning_task。不得猜测或重算 intakeRootHash。',
         'taskTitle 保留用户任务对象、动作和交付目标；可从当前项目读取到的来源由服务端固定 SourceVersion 后注入，插件不得自行伪造 sourceVersionIds 或 citations。步骤数量未被用户明确指定时不要虚构固定五步或六步。',
@@ -273,10 +295,11 @@ const plugin = defineLearnFlowPlugin({
         '用户明确确认当前候选后，使用候选中原样返回的 candidateId 与 sourceSnapshot.rootHash 调用 confirm_learning_task_candidate，并把 confirmed 设为 true；不得猜测或改写 rootHash。',
         '确认工具只让 LearnFlow 创建正式 LearningTask。生成、确认和任务完成都不等于掌握；评分、证据升级、教学策略与五核变更仍由 LearnFlow 的确定性规则控制。',
       ].join('\n'),
-      tools: ['prepare_learning_task_intake', 'draft_learning_task', 'read_learning_task_candidate', 'inspect_learning_task_evidence', 'audit_learning_task_candidate', 'prepare_learning_handoff', 'confirm_learning_task_candidate'],
+      tools: ['list_local_work_cases', 'prepare_local_work_case', 'prepare_learning_task_intake', 'draft_learning_task', 'read_learning_task_candidate', 'inspect_learning_task_evidence', 'audit_learning_task_candidate', 'prepare_learning_handoff', 'confirm_learning_task_candidate'],
       objectTypes: [...LEARNING_TASK_OBJECT_TYPES],
     }],
     renderers: [
+      { id: 'work_case_candidate', title: '本地案例候选', description: '显示固定版本与项目确认入口，保留教学模拟来源边界。' },
       { id: LEARNING_TASK_RENDERERS.intake, title: '任务转化准备单', description: '显示输入层级、原文锚点、任务候选和确认前 Plan 状态。' },
       { id: LEARNING_TASK_RENDERERS.candidate, title: '学习任务候选工作台', description: '按先后依赖显示任务步骤、产物、验收和步骤内知识技能。' },
       { id: LEARNING_TASK_RENDERERS.evidence, title: '候选来源证据', description: '显示固定来源、引用、覆盖与事实边界。' },
@@ -286,6 +309,8 @@ const plugin = defineLearnFlowPlugin({
     ],
   },
   handlers: {
+    list_local_work_cases: (_input, context) => listLocalWorkCases(context),
+    prepare_local_work_case: (input, context) => prepareLocalWorkCase(input, context),
     prepare_learning_task_intake: input => learningTaskConversionRuntime.prepare(input),
     draft_learning_task: (input, context) => learningTaskConversionRuntime.draft(input, context),
     read_learning_task_candidate: (input, context) => learningTaskConversionRuntime.read(input, context),

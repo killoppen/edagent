@@ -44,7 +44,7 @@ def test_registry_has_three_agents_five_kernels_and_no_drift():
     assert set(ACTION_BOARD) == set(CAPABILITY_OWNERS)
     assert validate_registry() == []
     manifest = registry_manifest()
-    assert REGISTRY_VERSION == "2026-09-03.3"
+    assert REGISTRY_VERSION == "2026-09-05.1"
     assert manifest["schema_valid"] is True
     assert manifest["valid"] is (
         manifest["schema_valid"] and manifest["implementation_valid"]
@@ -158,6 +158,16 @@ def test_targeted_events_declare_payload_and_explicit_reducer_bindings():
         "reducer:project_proposal_accepted"
     )
     assert EVENTS["project_completed"].reducer_binding == "reducer:project_completed"
+
+
+def test_project_operational_workflows_cannot_promote_mastery_or_expose_host_execution_to_models():
+    for tool_id in ("project_workflow_runtime", "local_work_case_catalog", "desktop_experiment_runner"):
+        assert TOOLS[tool_id].writes_kernels == ()
+        assert TOOL_INTERFACE_ROLES[tool_id] == "harness"
+    for event_id in ("project_workflow_initialized", "project_workbench_saved", "project_delivery_submitted",
+                     "project_reading_recorded", "experiment_run_started", "experiment_run_completed"):
+        assert EVENTS[event_id].kernel_targets == ()
+        assert EVENTS[event_id].reducer_binding is None
 
 
 def test_implementation_validation_requires_reducer_export_and_checks_members(monkeypatch):

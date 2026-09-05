@@ -1,5 +1,7 @@
 # LearnFlow 智能体架构与协作指南
 
+Contract impact（`2026-09-05.1`）：三类项目新增 `project_mode/project_brief` 与操作性工作台状态，继续复用正式 Project、Roadmap、Checkpoint、LearningTask 和 Session。桌面固定 C11 实验经快照预览和用户确认后执行，记录真实输出；案例按固定版本分阶段开放并记录提示程度；学习最终交付引用正式独立验证与复习。相关交付、纸张、阅读、提示、运行事件均零 kernel targets，流程通过不宣称掌握。Tutor 仅读取当前已开放阶段，普通文件选区明确携带路径、版本或未保存标识。详见[本地工作台](implementation/LOCAL_PROJECT_WORKBENCH.md)。
+
 Contract impact（`2026-09-04.1`）：桌宠选区入口继续由 `tutor_agent` 的
 `desktop_pet_gateway` 所有。全局快捷键改由跨平台 Tauri 服务按桌宠偏好注册；Windows
 保留原生可复制文本优先路径，macOS 使用系统交互式区域截图，截图仅在一次性临时文件中
@@ -693,7 +695,7 @@ link_project_workspace
 
 Agent 文件提案 MUST 绑定 `learner_id + project_id + checkpoint_id + session_id`，携带基础文件 SHA-256，并先返回 diff。确认前不落盘；确认时若文件已变化，提案自动失效。`.learnflow` 内的受管学习对象只能通过版本化领域能力修改，普通文件工具不得绕过。
 
-`.lflecture/.lfexercise` 只是数据库学习对象的逻辑文件入口：讲义按 `base_version` 保存并保留 `LectureVersion`，练习题面/答案/测试受保护，个人草稿与批注独立存储。普通文件支持 UTF-8 轻量编辑、Markdown 安全预览、图片/PDF 预览，但不提供解释器、终端或运行按钮。
+`.lflecture/.lfexercise` 只是数据库学习对象的逻辑文件入口：讲义按 `base_version` 保存并保留 `LectureVersion`，练习题面/答案/测试受保护，个人草稿与批注独立存储。普通文件支持 UTF-8 轻量编辑、Markdown 安全预览、图片/PDF 预览。桌面实验工作台另提供固定 C11 Profile，通过桌面令牌与归属验证、快照 hash 预览和明确确认执行；这是有界的可信本机进程，不是 OS 沙箱或通用终端。真实运行记录仅为操作证据，独立验证仍走正式 Practice 与证据链。
 
 文件关联与变更事件的 kernel target 为空。编辑成功、保存草稿和练习“运行”都不是掌握证据；只有播放器内的正式练习提交可进入评估链。本地代码 Agent 只能通过 Tutor 所有的 Broker 工具在隔离副本中工作，不新增第四类主 Agent。Tutor 只表达任务语义，Broker 按 Profile 能力/优先级确定性选择；首次确认启动，第二次确认并通过 hash 校验后写回，删除和移动逐项确认。安全细节以 `docs/DESKTOP_WORKSPACE_SECURITY.md` 为准。
 

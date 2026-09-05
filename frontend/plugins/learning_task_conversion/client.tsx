@@ -229,12 +229,24 @@ function ConfirmationRenderer(props: PluginToolRendererProps) {
   </section>
 }
 
+function WorkCaseCandidateRenderer(props: PluginToolRendererProps) {
+  const candidate = firstValue(props)
+  return <section className="ltc-panel">
+    <header><div className="ltc-mark">实</div><div><span>工作案例候选</span><h3>{String(candidate.title || '本地工作案例')}</h3></div><b className="pending">等待确认</b></header>
+    <p>{String(candidate.summary || '')}</p>
+    <p>版本 {String(candidate.case_version || '')} · {String(candidate.case_root_hash || '').slice(0, 12)}</p>
+    <p>请从项目工作台选择这份案例并确认开始。导师会随阶段获得相应材料，正式任务由 LearnFlow 保存。</p>
+    <footer>来源等级请查看案例说明；教学模拟不代表真实企业经历，生成候选不代表掌握。</footer>
+  </section>
+}
+
 export default defineLearnFlowPluginClient({
   pluginId: LEARNING_TASK_CONVERSION_PLUGIN.id,
   name: LEARNING_TASK_CONVERSION_PLUGIN.name,
   description: LEARNING_TASK_CONVERSION_PLUGIN.description,
   icon: LEARNING_TASK_CONVERSION_PLUGIN.icon,
   renderers: {
+    work_case_candidate: WorkCaseCandidateRenderer,
     [LEARNING_TASK_RENDERERS.intake]: LearningTaskIntakeRenderer,
     [LEARNING_TASK_RENDERERS.candidate]: CandidateRenderer,
     [LEARNING_TASK_RENDERERS.evidence]: EvidenceRenderer,

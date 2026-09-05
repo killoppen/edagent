@@ -17,6 +17,23 @@ import { buildProviderRequest } from '../src/tutor.ts'
 import { AI_LATENCY_BUDGETS } from '../src/latency-budgets.ts'
 import { parseVisualTeachingBrief } from './visual-teaching-skill.ts'
 
+test('project observation includes scoped guidance but omits future case and private paper content', async () => {
+  const context = {
+    project: { id: 7, name: '本地实验', project_mode: 'experiment' }, checkpoint_id: 10,
+    roadmap: { revision: 1, checkpoints: [] }, learning_tasks: [], sources: [], learning_files: {}, tool_policy: {},
+    project_workflow: { project_mode: 'experiment', initialized: true, workbench: { secret: 'PRIVATE_PAPER' },
+      evaluator: 'PRIVATE_EVALUATOR', milestones: [
+        { checkpoint_id: 10, title: '当前', status: 'available', materials: [{ title: '输入', body: 'CURRENT_INPUT' }], fields: [{ key: 'prediction', label: '预测' }] },
+        { checkpoint_id: 11, title: '后续', status: 'locked', materials: [{ title: '隐藏', body: 'FUTURE_INPUT' }], submission: { answers: { secret: 'FUTURE_ANSWER' } } },
+      ] },
+  } as any
+  const result = await executeTutorAgentTool('read_project_workspace', {}, { message: '如何开始', mode: 'guided_learning', formalProjectContext: context, generate: async () => 'unused' })
+  const observation = JSON.stringify(result.observation)
+  assert.match(observation, /CURRENT_INPUT/)
+  assert.match(observation, /先请学生预测/)
+  assert.doesNotMatch(observation, /PRIVATE_PAPER|PRIVATE_EVALUATOR|FUTURE_INPUT|FUTURE_ANSWER/)
+})
+
 function visualTeachingPayload(kind: 'diagram' | 'animation', topic = '联邦学习聚合过程') {
   return JSON.stringify({
     topic,

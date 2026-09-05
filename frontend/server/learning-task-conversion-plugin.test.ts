@@ -12,6 +12,21 @@ import {
 } from './agent-runtime.ts'
 import { learningTaskDraftConfirmationPrompt } from '../plugins/learning_task_conversion/intake.ts'
 import { loadLearnFlowPluginRegistry } from './plugin-loader.ts'
+import { prepareLocalWorkCase, validateLocalWorkCaseCandidate } from '../plugins/learning_task_conversion/work-case.ts'
+
+test('local work case plugin pins the host version and returns only an unconfirmed selector', async () => {
+  const candidate = { case_id: 'support-ticket-import', case_version: '1.0.0', case_root_hash: 'c'.repeat(64), title: 'CSV实践', summary: '教学模拟', project_mode: 'practice' }
+  const calls: unknown[] = []
+  const result = await prepareLocalWorkCase({ caseId: candidate.case_id, version: candidate.case_version, rootHash: candidate.case_root_hash }, {
+    projectIntegration: { request: async (...args: unknown[]) => { calls.push(args); return { status: 'ready', requires_confirmation: true, candidate: { ...candidate, evaluator: 'PRIVATE', future_materials: ['SECRET'] } } } },
+  } as any)
+  assert.deepEqual(calls, [['validate_work_case', { caseId: candidate.case_id, version: '1.0.0', root_hash: candidate.case_root_hash }]])
+  assert.deepEqual(result.objects[0].value, candidate)
+  assert.equal((result.payload as any).requires_confirmation, true)
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE|SECRET/)
+  assert.throws(() => validateLocalWorkCaseCandidate({ ...candidate, case_root_hash: 'stale' }))
+  await assert.rejects(prepareLocalWorkCase({}, { projectIntegration: { request: async () => ({ status: 'changed', requires_confirmation: false }) } } as any), /尚未通过/)
+})
 
 const activation = {
   mode: 'learning_plan' as const,
@@ -364,6 +379,8 @@ test('learning-task conversion contributes intake, candidate, confirmation and f
   const loaded = await registry()
   const tools = loaded.toolDefinitions(activation).filter(tool => tool.name.startsWith('learning_task_conversion__'))
   assert.deepEqual(tools.map(tool => tool.name), [
+    'learning_task_conversion__list_local_work_cases',
+    'learning_task_conversion__prepare_local_work_case',
     'learning_task_conversion__prepare_learning_task_intake',
     'learning_task_conversion__draft_learning_task',
     'learning_task_conversion__read_learning_task_candidate',
@@ -372,9 +389,10 @@ test('learning-task conversion contributes intake, candidate, confirmation and f
     'learning_task_conversion__prepare_learning_handoff',
     'learning_task_conversion__confirm_learning_task_candidate',
   ])
-  assert.equal(tools.filter(tool => tool.risk === 'artifact').length, 2)
-  assert.equal(tools.filter(tool => tool.risk === 'read_only').length, 5)
-  assert.match(loaded.skillInstructions(activation), /第一步都调用 learning_task_conversion__prepare_learning_task_intake/)
+  assert.equal(tools.filter(tool => tool.risk === 'artifact').length, 3)
+  assert.equal(tools.filter(tool => tool.risk === 'read_only').length, 6)
+  assert.match(loaded.skillInstructions(activation), /新的自由文本工作任务转化请求，第一步调用 learning_task_conversion__prepare_learning_task_intake/)
+  assert.match(loaded.skillInstructions(activation), /先list_local_work_cases/)
   assert.match(loaded.skillInstructions(activation), /严禁同一轮继续 draft_learning_task/)
   assert.match(loaded.skillInstructions(activation), /不得声称已进入个性化学习或正式发布/)
   assert.match(loaded.skillInstructions(activation), /sourceSnapshot\.rootHash/)

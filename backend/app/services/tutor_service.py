@@ -2020,6 +2020,8 @@ async def _generate_tutor_reply(
                 "name": active_project.name,
                 "description": active_project.description,
                 "user_level": active_project.user_level,
+                "project_mode": active_project.project_mode or "learning",
+                "project_brief": active_project.project_brief or {},
             } if active_project else None,
             "sources": [
                 {
@@ -2054,6 +2056,9 @@ async def _generate_tutor_reply(
                 ],
             } if accepted_proposal else None,
         }
+        if active_project:
+            from app.services.project_workflows import workflow_view
+            project_workspace["project_workflow"] = await workflow_view(db, active_project, compact=True)
     elif session.session_type == "checkpoint" and session.project_id and session.checkpoint_id:
         checkpoint_workspace = await build_checkpoint_tutor_context(
             db,

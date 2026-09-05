@@ -1,3 +1,4 @@
+import { structurallyCompact } from './context-compaction.ts'
 import type {
   AgentContextEnvelope,
   AgentDecisionSummary,
@@ -213,6 +214,8 @@ const PROJECT_PLUGIN_INTEGRATION_OPERATIONS = {
     audit_candidate: { method: 'GET', suffix: '/audit' },
     prepare_handoff: { method: 'GET', suffix: '/handoff' },
     confirm_candidate: { method: 'POST', suffix: '/confirm' },
+    list_work_cases: { method: 'GET', suffix: '', localCase: 'catalog' },
+    validate_work_case: { method: 'POST', suffix: '', localCase: 'validate' },
   },
 } as const
 
@@ -240,20 +243,27 @@ async function requestProjectPluginIntegration(options: {
   if (!options.input.backendBase) throw new Error('plugin_integration_error:backend_unavailable:LearnFlow 后端地址不可用')
   const pluginRoutes = PROJECT_PLUGIN_INTEGRATION_OPERATIONS[
     options.pluginId as keyof typeof PROJECT_PLUGIN_INTEGRATION_OPERATIONS
-  ] as Record<string, { method: 'GET' | 'POST'; suffix: string }> | undefined
+  ] as Record<string, { method: 'GET' | 'POST'; suffix: string; localCase?: 'catalog' | 'validate' }> | undefined
   const route = pluginRoutes?.[options.operation]
   if (!route) throw new Error('plugin_integration_error:operation_forbidden:插件请求了未授权的项目集成操作')
   const body = options.payload && typeof options.payload === 'object' && !Array.isArray(options.payload)
     ? options.payload as Record<string, unknown> : {}
   const candidateId = typeof body.candidateId === 'string' && /^ltc_[A-Za-z0-9_-]{1,72}$/.test(body.candidateId)
     ? body.candidateId : ''
-  if ((route.method === 'GET' || route.suffix) && !candidateId) {
+  if (!route.localCase && (route.method === 'GET' || route.suffix) && !candidateId) {
     throw new Error('plugin_integration_error:candidate_id_required:候选操作缺少 candidateId')
   }
   const basePath = `/api/projects/${projectId}/integrations/xingchen/learning-task-candidates`
-  const path = route.method === 'POST' && !route.suffix
+  let path = route.method === 'POST' && !route.suffix
     ? basePath
     : `${basePath}/${encodeURIComponent(candidateId)}${route.suffix}`
+  let requestBody = projectPluginIntegrationRequestBody(route, body)
+  if (route.localCase === 'catalog') path = '/api/practice-cases'
+  if (route.localCase === 'validate') {
+    if (typeof body.caseId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(body.caseId)) throw new Error('plugin_integration_error:invalid_case_id')
+    path = `/api/practice-cases/${encodeURIComponent(body.caseId)}/validate`
+    requestBody = { version: body.version, root_hash: body.root_hash }
+  }
   let csrfToken = ''
   if (route.method === 'POST') {
     const csrfResponse = await fetch(`${options.input.backendBase}/api/auth/csrf`, {
@@ -273,7 +283,7 @@ async function requestProjectPluginIntegration(options: {
       ...(options.input.requestCookie ? { Cookie: options.input.requestCookie } : {}),
       ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
     },
-    ...(route.method === 'POST' ? { body: JSON.stringify(projectPluginIntegrationRequestBody(route, body)) } : {}),
+    ...(route.method === 'POST' ? { body: JSON.stringify(requestBody) } : {}),
     signal: options.signal,
   })
   const text = await response.text()
@@ -389,27 +399,6 @@ export function repairTutorDraftForObservedGaps(reply: string, runs: TutorToolRu
   return repaired
 }
 
-function structurallyCompact(value: unknown, depth = 0, tight = false): unknown {
-  if (typeof value === 'string') {
-    const max = tight ? 320 : 1600
-    return value.length > max ? `${value.slice(0, max - 1)}…` : value
-  }
-  if (value === null || typeof value !== 'object') return value
-  if (depth >= (tight ? 4 : 7)) return { omitted: true, reason: 'depth_budget' }
-  if (Array.isArray(value)) {
-    const max = tight ? 8 : 24
-    const items = value.slice(0, max).map(item => structurallyCompact(item, depth + 1, tight))
-    return value.length > max ? [...items, { omittedItems: value.length - max }] : items
-  }
-  const entries = Object.entries(value as Record<string, unknown>)
-  const max = tight ? 24 : 60
-  const result = Object.fromEntries(entries.slice(0, max).map(([key, item]) => [
-    key,
-    structurallyCompact(item, depth + 1, tight),
-  ]))
-  if (entries.length > max) result.__omittedFields = entries.length - max
-  return result
-}
 
 function safeJson(value: unknown, limit = 18_000) {
   const normal = JSON.stringify(structurallyCompact(value))

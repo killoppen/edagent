@@ -10,9 +10,11 @@ type Props = {
   sheetId?: string
   onAttach?: (file: { kind: 'lecture'; ref: string; title: string }) => void
   onFollowUp?: () => void
+  initialPosition?: number
+  onPositionChange?: (position: number) => void
 }
 
-export default function LectureFilePage({ lectureId, embedded, conversationId, sheetId, onAttach, onFollowUp }: Props) {
+export default function LectureFilePage({ lectureId, embedded, conversationId, sheetId, onAttach, onFollowUp, initialPosition = 0, onPositionChange }: Props) {
   const [file, setFile] = useState<Awaited<ReturnType<typeof loadLectureFile>>>()
   const [active, setActive] = useState(0)
   const [notice, setNotice] = useState('')
@@ -22,6 +24,7 @@ export default function LectureFilePage({ lectureId, embedded, conversationId, s
     void loadLectureFile(lectureId).then(result => {
       if (!alive) return
       setFile(result)
+      setActive(Math.max(0, Math.min(initialPosition, result.sections.length - 1)))
       void recordLearningFileAccess('lecture', String(lectureId), 'opened', { conversation_id: conversationId, sheet_id: sheetId }).catch(() => undefined)
     }).catch(failure => alive && setError(failure instanceof Error ? failure.message : '讲义读取失败'))
     return () => { alive = false }
@@ -40,7 +43,7 @@ export default function LectureFilePage({ lectureId, embedded, conversationId, s
       </header>
       {notice && <div className="learning-evidence-notice">{notice}</div>}
       <div className="lecture-file-layout">
-        <nav aria-label="讲义目录">{file.sections.map((section, index) => <button type="button" className={index === active ? 'active' : ''} key={`${section.title}-${index}`} onClick={() => setActive(index)}><i>{String(index + 1).padStart(2, '0')}</i><span>{section.title || `第 ${index + 1} 节`}</span></button>)}</nav>
+        <nav aria-label="讲义目录">{file.sections.map((section, index) => <button type="button" className={index === active ? 'active' : ''} key={`${section.title}-${index}`} onClick={() => { setActive(index); onPositionChange?.(index) }}><i>{String(index + 1).padStart(2, '0')}</i><span>{section.title || `第 ${index + 1} 节`}</span></button>)}</nav>
         <article><Suspense fallback={<div className="page-loading">渲染讲义…</div>}><MarkdownContent content={`# ${file.sections[active]?.title || file.title}\n\n${file.sections[active]?.content || '本节暂无内容。'}`} /></Suspense></article>
       </div>
       {!embedded && <footer>阅读位置会保留，便于下次继续。</footer>}

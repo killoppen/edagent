@@ -1165,6 +1165,9 @@ pub fn run() {
             // project folder.
             let source_cache_dir = app_data_dir.join("repo-files");
             let source_uploads_dir = app_data_dir.join("source-uploads");
+            // Keep experiment snapshots beyond PyInstaller's temporary extraction lifetime.
+            let runtime_dir = app_data_dir.join("runtime");
+            std::fs::create_dir_all(&runtime_dir)?;
             std::fs::create_dir_all(&source_cache_dir)?;
             std::fs::create_dir_all(&source_uploads_dir)?;
             let database_url = format!(
@@ -1186,6 +1189,7 @@ pub fn run() {
                 .env("SOURCE_CACHE_DIR", source_cache_dir.to_string_lossy().as_ref())
                 .env("REPO_FILES_DIR", source_cache_dir.to_string_lossy().as_ref())
                 .env("SOURCE_UPLOADS_DIR", source_uploads_dir.to_string_lossy().as_ref())
+                .env("RUNTIME_DIR", runtime_dir.to_string_lossy().as_ref())
                 .env("LEARNFLOW_SETTINGS_PATH", settings_path.to_string_lossy().as_ref())
                 .env("PLUGIN_ARTIFACT_DIR", plugin_artifact_dir.to_string_lossy().as_ref())
                 // A learner-visible memory graph must continuously consume

@@ -39,11 +39,17 @@ router = APIRouter(prefix="/vnext-projects", tags=["vNext Projects"])
 SCHEMA_VERSION = "vnext.project.v1"
 
 
+from app.schemas.project_workflow import ProjectMode, ProjectBrief
+from app.services.project_workflows import workflow_view
+
+
 class ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     objective: str = Field(min_length=2, max_length=2000)
     expected_outcome: str = Field(default="", max_length=1200)
     user_level: str = Field(default="beginner", max_length=50)
+    project_mode: ProjectMode = "learning"
+    project_brief: ProjectBrief = Field(default_factory=ProjectBrief)
 
 
 class CheckpointProposal(BaseModel):
@@ -108,6 +114,8 @@ def _project_spec(project: Project) -> dict[str, Any]:
         "objective": objective,
         "expected_outcome": expected,
         "user_level": project.user_level,
+        "project_mode": project.project_mode or "learning",
+        "project_brief": project.project_brief or {},
         "created_at": project.created_at.isoformat() if project.created_at else None,
     }
 
@@ -362,6 +370,7 @@ async def create_vnext_project(
     project = Project(
         learner_id=current.learner.id, name=data.name.strip(), description=description,
         user_level=data.user_level, project_kind="apprenticeship", visibility="visible",
+        project_mode=data.project_mode, project_brief=data.project_brief.model_dump(),
     )
     db.add(project)
     await db.flush()
@@ -484,6 +493,10 @@ async def revise_vnext_roadmap(
     is validated before any revision becomes authoritative.
     """
     project = await require_owned_project(db, current.learner.id, project_id)
+    from app.models.project import ProjectWorkflowState
+    workflow_state = await db.scalar(select(ProjectWorkflowState).where(ProjectWorkflowState.project_id == project.id))
+    if workflow_state and workflow_state.case_ref:
+        raise HTTPException(409, "固定案例的阶段契约不可改写；新版本请建立新的实践项目")
     if data.project_theme.strip().casefold() != project.name.strip().casefold():
         raise HTTPException(422, "规划主题必须与当前项目完全一致")
     prior_event = (await db.execute(select(EvidenceEvent.id).where(
@@ -758,6 +771,7 @@ async def get_project_agent_context(
     response = {
         "schema_version": SCHEMA_VERSION,
         "project": _project_spec(project), "checkpoint_id": checkpoint_id,
+        "project_workflow": await workflow_view(db, project, compact=True, checkpoint_id=checkpoint_id),
         "roadmap": workspace["roadmap"],
         "learning_tasks": [await learning_task_view(db, task) for task in tasks],
         "sources": sources, "learning_files": files,

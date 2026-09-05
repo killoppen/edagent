@@ -17,7 +17,7 @@ from typing import Any
 from app.services.action_board import ACTION_BOARD
 
 
-REGISTRY_VERSION = "2026-09-03.3"
+REGISTRY_VERSION = "2026-09-05.1"
 EVENT_SCHEMA_VERSION = "learnflow.evidence.v1"
 SKILL_SPEC_VERSION = "learnflow.skill.v3"
 # The learner-facing SkillSpec changed in this registry release.
@@ -529,6 +529,12 @@ TOOLS = {
         ToolContract("task_runtime", "Idempotent Background Task Runtime", "tutor_agent", "learnflow", "execution"),
         ToolContract("workspace_file_service", "Desktop Workspace File Service", "tutor_agent", "learnflow", "filesystem",
                      (), (), "confirmed WorkspaceOperation only"),
+        ToolContract("desktop_experiment_runner", "Desktop C Experiment Runner", "tutor_agent", "learnflow", "trusted_local_execution",
+                     (), (), "desktop-only hash-bound preview and explicit execution confirmation; operational records only"),
+        ToolContract("project_workflow_runtime", "Three-mode Project Workflow Runtime", "tutor_agent", "learnflow", "execution",
+                     (), (), "explicit project composition and operational delivery; formal Checkpoint and Session authority; answer-free current-stage projection"),
+        ToolContract("local_work_case_catalog", "Versioned Local Work Case Catalog", "tutor_agent", "learnflow", "read",
+                     (), (), "catalog and hash-bound unconfirmed selectors only; no future materials or evaluator disclosure"),
         ToolContract("managed_artifact_service", "Managed Learning Artifact Service", "tutor_agent", "learnflow", "artifact",
                      (), (), "versioned lecture/draft/annotation domain APIs"),
         ToolContract("local_agent_broker", "Local Agent Broker", "tutor_agent", "learnflow", "isolated_execution",
@@ -566,6 +572,8 @@ TOOL_INTERFACE_ROLES = {
         "learning_skill_runtime", "learning_task_runtime", "learning_task_planner",
         "checkpoint_context", "context_packet_assembler", "task_runtime", "seeded_demo",
         "source_version_runtime", "domain_knowledge_packet_compiler",
+        "desktop_experiment_runner",
+        "project_workflow_runtime", "local_work_case_catalog",
     }},
     **{tool_id: "projection" for tool_id in {
         "review_scheduler", "review_proficiency_projector", "five_kernel_reducer", "memory_graph", "kernel_head_projector", "checkpoint_delivery_readiness",
@@ -1083,6 +1091,14 @@ SKILLS = {
                       ("workspace_file_service", "evidence_ledger"),
                       "hash-bound diff proposal + explicit confirmation + operational event",
                       "WorkspaceOperation state machine"),
+        SkillContract("desktop_experiment_workflow", "本地实验预测、实现与验证", "tutor_agent",
+                      ("desktop_experiment_runner", "workspace_file_service", "evidence_ledger"),
+                      "immutable source snapshot + real build/run output + bounded comparison + learner explanation",
+                      "fixed c11 profile; explicit user confirmation; no shell, no grading or kernel writes"),
+        SkillContract("three_mode_project_guidance", "资料、实验与案例项目引导", "tutor_agent",
+                      ("project_workflow_runtime", "local_work_case_catalog", "evidence_ledger"),
+                      "source reading and recall; prediction, implementation and verification; staged apprentice case, delivery and reflection",
+                      "same formal Roadmap, Checkpoint, LearningTask and Session; operational completion never implies knowledge mastery"),
         SkillContract("managed_learning_file_playback", "讲义与练习专用播放器", "tutor_agent",
                       ("managed_artifact_service", "deterministic_assessment", "evidence_ledger"),
                       "versioned lecture, personal draft, annotation and formal assessment",
@@ -1156,7 +1172,8 @@ WORKBENCHES = {
                           ("add_source", "read_project_roadmap", "revise_project_roadmap", "plan_learning_path", "apply_learning_path", "navigate_checkpoint",
                            "manage_project_conversations", "manage_learning_tasks", "plan_learning_task",
                            "run_learning_task", "generate_learning_files", "open_learning_file",
-                           "attach_learning_file_to_chat", "draft_learning_task_candidate", "delete_project"), "vnext"),
+                           "attach_learning_file_to_chat", "draft_learning_task_candidate", "delete_project",
+                           "read_project_workflow", "prepare_local_work_case", "initialize_project_workflow", "save_project_workbench", "submit_project_delivery", "record_project_reading", "request_project_hint"), "vnext"),
         WorkbenchContract("lecture", "Checkpoint Tutor · Lecture", "/projects/:projectId/checkpoints/:checkpointId", "tutor_agent",
                           ("generate_lecture", "explain_selection", "generate_assessment")),
         WorkbenchContract("assessment", "Checkpoint Tutor · Assessment", "/projects/:projectId/checkpoints/:checkpointId/exercises", "tutor_agent",
@@ -1175,7 +1192,7 @@ WORKBENCHES = {
                            "evaluate_attempt", "request_remediation_explanation", "retry_attempt",
                            "evaluate_transfer_variant"), "fused"),
         WorkbenchContract("desktop_workspace", "Desktop File Workspace", "tauri://workspace", "tutor_agent",
-                          ("link_project_workspace", "inspect_workspace_files", "propose_workspace_change", "apply_workspace_change", "open_managed_learning_artifact", "edit_managed_lecture", "annotate_learning_artifact", "delegate_local_agent_task", "inspect_local_agent_run", "cancel_local_agent_run", "apply_local_agent_result")),
+                          ("link_project_workspace", "inspect_workspace_files", "propose_workspace_change", "apply_workspace_change", "open_managed_learning_artifact", "edit_managed_lecture", "annotate_learning_artifact", "delegate_local_agent_task", "inspect_local_agent_run", "cancel_local_agent_run", "apply_local_agent_result", "inspect_experiment_environment", "propose_experiment_run", "execute_experiment_run", "inspect_experiment_run")),
         WorkbenchContract("desktop_pet", "Desktop Pet Companion", "tauri://pet", "tutor_agent",
                           ("coordinate_vnext_agent_turn", "desktop_pet_companion", "desktop_pet_task_control",
                            "desktop_pet_main_navigation", "desktop_pet_context_attachment"), "desktop"),
@@ -1186,6 +1203,13 @@ WORKBENCHES = {
 
 
 CAPABILITY_OWNERS = {
+    "read_project_workflow": ("tutor_agent", "project_workflow_runtime", "project_tutor"),
+    "request_project_hint": ("tutor_agent", "project_workflow_runtime", "project_tutor"),
+    "prepare_local_work_case": ("tutor_agent", "local_work_case_catalog", "project_tutor"),
+    "initialize_project_workflow": ("tutor_agent", "project_workflow_runtime", "project_tutor"),
+    "save_project_workbench": ("tutor_agent", "project_workflow_runtime", "project_tutor"),
+    "submit_project_delivery": ("tutor_agent", "project_workflow_runtime", "project_tutor"),
+    "record_project_reading": ("tutor_agent", "project_workflow_runtime", "project_tutor"),
     "coordinate_chat_mode": ("tutor_agent", "chat_mode_runtime", "global_tutor"),
     "coordinate_vnext_agent_turn": ("tutor_agent", "vnext_agent_turn_runtime", "vnext_chat"),
     "search_computer_knowledge": ("learning_design_agent", "computer_knowledge_search", "vnext_chat"),
@@ -1265,6 +1289,10 @@ CAPABILITY_OWNERS = {
     "manage_review_item": ("practice_agent", "review_scheduler", "review"),
     "record_task_outcome": ("tutor_agent", "task_runtime", "project_tutor"),
     "link_project_workspace": ("tutor_agent", "workspace_file_service", "desktop_workspace"),
+    "inspect_experiment_environment": ("tutor_agent", "desktop_experiment_runner", "desktop_workspace"),
+    "propose_experiment_run": ("tutor_agent", "desktop_experiment_runner", "desktop_workspace"),
+    "execute_experiment_run": ("tutor_agent", "desktop_experiment_runner", "desktop_workspace"),
+    "inspect_experiment_run": ("tutor_agent", "desktop_experiment_runner", "desktop_workspace"),
     "inspect_workspace_files": ("tutor_agent", "workspace_file_service", "desktop_workspace"),
     "propose_workspace_change": ("tutor_agent", "workspace_file_service", "desktop_workspace"),
     "apply_workspace_change": ("tutor_agent", "workspace_file_service", "desktop_workspace"),
@@ -1294,6 +1322,11 @@ def _event(event_id: str, capability: str, targets: tuple[str, ...], role: str,
 
 EVENTS = {
     item.id: item for item in (
+        _event("project_workflow_initialized", "initialize_project_workflow", (), "local_operational"),
+        _event("project_assistance_requested", "request_project_hint", (), "local_support_signal"),
+        _event("project_workbench_saved", "save_project_workbench", (), "local_operational"),
+        _event("project_delivery_submitted", "submit_project_delivery", (), "local_operational"),
+        _event("project_reading_recorded", "record_project_reading", (), "local_operational"),
         _event("chat_mode_entered", "coordinate_chat_mode", (), "operational_context"),
         _event("learning_action_segment_completed", "coordinate_chat_mode", ("structure", "knowledge", "value"), "learning_action_projection"),
         _event(
@@ -1425,6 +1458,8 @@ EVENTS = {
         _event("project_completed", "advance_checkpoint", ("structure", "value", "practice"), "milestone"),
         _event("workspace_linked", "link_project_workspace", (), "operational"),
         _event("workspace_change_applied", "apply_workspace_change", (), "operational"),
+        _event("experiment_run_started", "execute_experiment_run", (), "confirmed_local_execution"),
+        _event("experiment_run_completed", "inspect_experiment_run", (), "operational_result"),
         _event("local_agent_started", "delegate_local_agent_task", (), "operational"),
         _event("local_agent_completed", "inspect_local_agent_run", (), "operational"),
         _event("local_agent_canceled", "cancel_local_agent_run", (), "operational"),
@@ -1485,6 +1520,18 @@ _PYTHON_BINDING_TARGETS = {
     "py:workspace.delete_conversation": ("app.services.workspace_lifecycle", "delete_conversation_workspace"),
     "py:workspace.delete_project": ("app.services.workspace_lifecycle", "delete_project_workspace"),
     "py:workspace.scan": ("app.services.workspace_files", "scan_workspace_tree"),
+    "py:experiment.profiles": ("app.services.experiment_runner", "experiment_profiles"),
+    "py:experiment.preview": ("app.services.experiment_runner", "preview_run"),
+    "py:experiment.confirm": ("app.services.experiment_runner", "confirm_run"),
+    "py:experiment.read": ("app.api.experiments", "get_experiment_run"),
+    "py:project_workflow.read": ("app.services.project_workflows", "workflow_view"),
+    "py:project_workflow.hint": ("app.services.project_workflows", "request_hint"),
+    "py:project_workflow.initialize": ("app.services.project_workflows", "initialize_workflow"),
+    "py:project_workflow.save": ("app.services.project_workflows", "save_workbench"),
+    "py:project_workflow.deliver": ("app.services.project_workflows", "deliver_checkpoint"),
+    "py:project_workflow.reading": ("app.services.project_workflows", "record_reading"),
+    "py:work_case.catalog": ("app.services.practice_cases", "case_catalog"),
+    "py:work_case.validate": ("app.api.project_workflows", "validate_case"),
     "py:local_agent.create": ("app.services.local_agent_broker", "create_run_for_action"),
     "py:demo.seed": ("app.services.demo_seed", "seed_competition_demo"),
     "py:demo.grade_seeded_code": ("app.services.demo_code_grader", "grade_seeded_demo_code"),
@@ -1782,6 +1829,9 @@ _TOOL_BINDING_IDS = {
     "seeded_demo": ("py:demo.seed", "py:demo.grade_seeded_code", "api:demo.status"),
     "task_runtime": ("py:task.manager",),
     "workspace_file_service": ("py:workspace.scan",),
+    "desktop_experiment_runner": ("py:experiment.profiles", "py:experiment.preview", "py:experiment.confirm", "py:experiment.read"),
+    "project_workflow_runtime": ("py:project_workflow.read", "py:project_workflow.initialize", "py:project_workflow.save", "py:project_workflow.deliver", "py:project_workflow.reading", "py:project_workflow.hint"),
+    "local_work_case_catalog": ("py:work_case.catalog", "py:work_case.validate"),
     "managed_artifact_service": ("api:phase2.put_lecture",),
     "local_agent_broker": ("py:local_agent.create",),
     "desktop_pet_gateway": ("api:pet.bootstrap", "api:pet.context", "api:pet.selection_text"),
@@ -1835,6 +1885,8 @@ _SKILL_BINDING_IDS = {
     "spaced_review": ("py:review.schedule", "py:review.proficiency"),
     "learner_memory_synthesis": ("py:memory_graph.create", "py:five_kernel.context"),
     "workspace_file_management": ("api:workspace.link", "api:workspace.confirm"),
+    "desktop_experiment_workflow": ("py:experiment.preview", "py:experiment.confirm", "py:experiment.read"),
+    "three_mode_project_guidance": ("py:project_workflow.read", "py:project_workflow.initialize", "py:project_workflow.deliver", "py:work_case.validate"),
     "managed_learning_file_playback": ("api:learning_files.list", "api:phase2.put_lecture"),
     "local_agent_delegation": ("py:local_agent.create", "api:local_agent.apply"),
 }

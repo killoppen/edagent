@@ -13,6 +13,13 @@ class ActionDefinition:
 
 ACTION_BOARD = {
     item.capability: item for item in (
+        ActionDefinition("read_project_workflow", "读取三类项目的当前流程", "none", "none", {}, ("initialize_project_workflow", "submit_project_delivery")),
+        ActionDefinition("request_project_hint", "请求当前阶段的分档提示", "context", "explicit_or_click", {}, ("submit_project_delivery",)),
+        ActionDefinition("prepare_local_work_case", "校验固定版本实践案例候选", "proposal", "explicit_or_click", {}, ("initialize_project_workflow",)),
+        ActionDefinition("initialize_project_workflow", "确认项目路线与正式关卡任务", "write", "explicit_or_click", {}, ("read_project_workflow",)),
+        ActionDefinition("save_project_workbench", "保存工作台纸张与布局", "write", "explicit_or_click", {}, ()),
+        ActionDefinition("submit_project_delivery", "提交交付物并读取有界反馈", "write", "explicit_or_click", {}, ("read_project_workflow",)),
+        ActionDefinition("record_project_reading", "记录资料阅读位置与复述", "write", "explicit_or_click", {}, ("read_project_workflow",)),
         ActionDefinition(
             "search_projects", "匹配已有学习项目", "none", "none",
             {"structure": "project_match"},
@@ -435,6 +442,10 @@ ACTION_BOARD = {
             {},
             ("inspect_workspace_files",),
         ),
+        ActionDefinition("inspect_experiment_environment", "检查实验工具链", "none", "none", {}, ("propose_experiment_run",)),
+        ActionDefinition("propose_experiment_run", "预览实验执行", "proposal", "explicit_or_click", {}, ("execute_experiment_run",)),
+        ActionDefinition("execute_experiment_run", "确认实验编译与运行", "execution", "explicit", {}, ("inspect_experiment_run",)),
+        ActionDefinition("inspect_experiment_run", "读取真实实验结果", "none", "none", {}, ()),
         ActionDefinition(
             "inspect_workspace_files", "查看项目文件", "none", "none",
             {},

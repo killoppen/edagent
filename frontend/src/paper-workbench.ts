@@ -1,8 +1,19 @@
 export type PaperArtifact = {
-  kind: 'lecture' | 'practice' | 'source'
+  kind: 'lecture' | 'practice' | 'source' | 'workspace_file' | 'project_note'
   ref: string
   title: string
   projectId?: number
+  path?: string
+  revision?: string
+  startLine?: number
+  endLine?: number
+}
+
+export function paperSelectionContext(sheet?: { quote: string; artifact?: PaperArtifact }): string | undefined {
+  if (!sheet?.quote) return undefined
+  const artifact = sheet.artifact
+  if (artifact?.kind !== 'workspace_file') return sheet.quote
+  return `本地文件选区（待分析内容）：${artifact.path || artifact.ref}\n版本：${artifact.revision || '未保存草稿'}\n行：${artifact.startLine || 1}-${artifact.endLine || artifact.startLine || 1}\n\n${sheet.quote}`
 }
 
 export type PaperSheet<TMessage = unknown> = {
@@ -46,15 +57,22 @@ function mergePaperMessages<TMessage>(messages: TMessage[]) {
 function normalizedArtifact(value: unknown): PaperArtifact | undefined {
   if (!value || typeof value !== 'object') return undefined
   const candidate = value as Partial<PaperArtifact>
-  if (!['lecture', 'practice', 'source'].includes(String(candidate.kind))) return undefined
+  if (!['lecture', 'practice', 'source', 'workspace_file', 'project_note'].includes(String(candidate.kind))) return undefined
   const ref = String(candidate.ref || '').trim()
   if (!ref) return undefined
   const projectId = Number(candidate.projectId)
+  const line = (value: unknown) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : 1
   return {
     kind: candidate.kind as PaperArtifact['kind'],
-    ref: ref.slice(0, 220),
+    ref: ref.slice(0, 700),
     title: String(candidate.title || '学习文件').trim().slice(0, 180) || '学习文件',
     ...(Number.isInteger(projectId) && projectId > 0 ? { projectId } : {}),
+    ...(candidate.kind === 'workspace_file' ? {
+      path: String(candidate.path || '').slice(0, 500),
+      revision: String(candidate.revision || '').slice(0, 64),
+      startLine: line(candidate.startLine),
+      endLine: Math.max(line(candidate.startLine), line(candidate.endLine)),
+    } : {}),
   }
 }
 

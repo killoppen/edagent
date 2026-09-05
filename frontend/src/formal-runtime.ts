@@ -7,7 +7,7 @@ import type {
   PersonalPathNodeProposal,
 } from './learning-path-graph'
 import type { PlanningEvent, ValueClaimProposal } from './planning'
-import type { FormalProjectWorkspace, ProjectRoadmapProposal } from './project'
+import type { FormalProjectWorkspace, ProjectRoadmapProposal, ProjectMode, ProjectBrief } from './project'
 import {
   activateRuntimeAuth,
   captureRuntimeAuth,
@@ -996,7 +996,7 @@ export async function listFormalProjects() {
 }
 
 export async function createFormalProject(input: {
-  name: string; objective: string; expectedOutcome: string; userLevel?: string
+  name: string; objective: string; expectedOutcome: string; userLevel?: string; projectMode?: ProjectMode; projectBrief?: ProjectBrief
 }) {
   await ensureFormalIdentity()
   return jsonRequest<FormalProjectWorkspace>('/api/vnext-projects', {
@@ -1006,6 +1006,8 @@ export async function createFormalProject(input: {
       objective: input.objective,
       expected_outcome: input.expectedOutcome,
       user_level: input.userLevel || 'beginner',
+      project_mode: input.projectMode || 'learning',
+      project_brief: input.projectBrief || { deliverables: [], constraints: [], success_criteria: [] },
     }),
   })
 }
