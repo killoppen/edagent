@@ -1,5 +1,7 @@
 # LearnFlow 智能体架构与协作指南
 
+Contract impact（`2026-09-05.2`）：五核升级修复语义来源、目标/偏好更新、撤回与长期候选窗口。新增 `semantic_observation_proposed` 事件，仅保留有原事件引用的短期候选；Module policy v2按独立事件与类型化能力证据门更新。检索先作用域过滤，关联路径统一答案/人因/有效状态边界，SUPERSEDES作为已解决更新。Tutor保留时间与范围并支持真实重检索；学习任务消费有scope的证据，重做失败不代表明确拒绝讲法，无变式不显示可迁移。画像面向当前重点/基础/进展/支持方式。无需数据库结构迁移，旧事件保留；真实学习收益仍待试点。实施与兼容边界见 `docs/MEMORY_UPGRADE_IMPLEMENTATION.md`。
+
 Contract impact（`2026-09-05.1`）：三类项目新增 `project_mode/project_brief` 与操作性工作台状态，继续复用正式 Project、Roadmap、Checkpoint、LearningTask 和 Session。桌面固定 C11 实验经快照预览和用户确认后执行，记录真实输出；案例按固定版本分阶段开放并记录提示程度；学习最终交付引用正式独立验证与复习。相关交付、纸张、阅读、提示、运行事件均零 kernel targets，流程通过不宣称掌握。Tutor 仅读取当前已开放阶段，普通文件选区明确携带路径、版本或未保存标识。详见[本地工作台](implementation/LOCAL_PROJECT_WORKBENCH.md)。
 
 Contract impact（`2026-09-04.1`）：桌宠选区入口继续由 `tutor_agent` 的

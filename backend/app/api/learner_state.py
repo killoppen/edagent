@@ -523,7 +523,7 @@ async def sync_learner_event(
             session_id=request.session_id,
             payload=request.payload,
             occurred_at=request.occurred_at,
-            confidence=1.0,
+            confidence=0.8 if request.event_type in {"vnext_human_adaptation_requested", "vnext_planning_profile_self_reported"} else 1.0,
             provenance={
                 "vnext_sync": True,
                 **(
