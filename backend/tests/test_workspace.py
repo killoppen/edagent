@@ -549,7 +549,13 @@ def test_traversal_links_protected_paths_delete_restore_and_user_isolation(tmp_p
     (root / "delete-me.txt").write_text("recover me", encoding="utf-8")
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
-    (root / "outside-link.txt").symlink_to(outside)
+    symlink_created = True
+    try:
+        (root / "outside-link.txt").symlink_to(outside)
+    except OSError:
+        # Windows only grants SeCreateSymbolicLinkPrivilege to an elevated
+        # process or with Developer Mode enabled.
+        symlink_created = False
 
     with TestClient(app) as alice, TestClient(app) as bob:
         alice.post("/api/auth/register", json=registration("workspace_owner_alice"))
@@ -569,10 +575,11 @@ def test_traversal_links_protected_paths_delete_restore_and_user_isolation(tmp_p
             f"/api/projects/{project_id}/workspace/files/.learnflow/project.lfproject",
             headers=DESKTOP_HEADERS,
         ).status_code == 403
-        assert alice.get(
-            f"/api/projects/{project_id}/workspace/files/outside-link.txt",
-            headers=DESKTOP_HEADERS,
-        ).status_code == 403
+        if symlink_created:
+            assert alice.get(
+                f"/api/projects/{project_id}/workspace/files/outside-link.txt",
+                headers=DESKTOP_HEADERS,
+            ).status_code == 403
 
         current = alice.get(
             f"/api/projects/{project_id}/workspace/files/delete-me.txt", headers=DESKTOP_HEADERS,
