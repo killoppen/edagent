@@ -50,6 +50,10 @@ TRANSIENT_HUMAN_KEYS = {
 }
 NON_MEMORY_PATCH_KEYS = {
     "transient_expires_at", "adaptation_source", "adaptation_scope",
+    # These are bounded, scoped control projections, not evidence summaries.
+    # The original event/mutation already preserves their sources. Re-synthesis
+    # would repeat old instructions and defeat per-turn expiry and replacement.
+    "teaching_directives", "teaching_preferences",
 }
 BOUNDARY_EVENTS = {
     "project_created", "project_imported", "project_selected", "roadmap_applied", "roadmap_revised", "checkpoint_entered",

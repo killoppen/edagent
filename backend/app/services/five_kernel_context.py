@@ -29,6 +29,7 @@ from app.models.learning import (
 )
 from app.services.architecture_registry import KERNEL_NAMES
 from app.services.personal_concept_graph import build_personal_concept_context
+from app.services.teaching_guidance import GUIDANCE_VERSION, select_teaching_guidance
 
 
 MEMORY_SCHEMA_VERSION = "memory-item.v2"
@@ -713,6 +714,19 @@ async def build_five_kernel_context(
         MemoryArchive.learner_id == learner_id, MemoryArchive.status == "archived",
     ))).scalars().all())
     archived_ids = await _archived_projection_ids(db, learner_id, archives)
+    guidance_states = (await db.execute(select(KernelState).where(
+        KernelState.learner_id == learner_id,
+    ))).scalars().all()
+    teaching_guidance = select_teaching_guidance(
+        {row.kernel_name: {"short_term": dict(row.short_term or {}),
+                           "long_term": dict(row.long_term or {})} for row in guidance_states},
+        project_id=project_id, checkpoint_id=checkpoint_id, session_id=session_id,
+        archived_paths={(entry.kernel_name, entry.memory_scope, entry.memory_key) for entry in archives},
+    )
+    guidance_omitted = 0
+    while teaching_guidance and _token_estimate(teaching_guidance) > min(800, policy.token_budget // 3):
+        teaching_guidance.pop()
+        guidance_omitted += 1
     heads = await ensure_kernel_heads(db, learner_id)
     head_rows = [head for head in heads if head.kernel_name in policy.head_kernels]
     raw_head_refs = {
@@ -898,6 +912,7 @@ async def build_five_kernel_context(
     used_tokens = (
         _token_estimate(head_payload) + _token_estimate(concept_context)
         + _token_estimate(adaptation_directives)
+        + _token_estimate(teaching_guidance)
     )
     for score, _, node, reasons in ranked:
         candidate = _serialize_item(
@@ -981,6 +996,7 @@ async def build_five_kernel_context(
             "paths": relation_paths,
             "personal_concept_graph": concept_context,
             "adaptation_directives": adaptation_directives,
+            "teaching_guidance": teaching_guidance,
         })
 
     # One-hop paths are discovered after item selection.  Trim the least
@@ -1009,7 +1025,7 @@ async def build_five_kernel_context(
 
     evidence_ids = sorted({
         int(ref) for item in items for ref in item.get("evidence_refs", []) if ref is not None
-    })
+    } | {int(item["source_event_id"]) for item in teaching_guidance if item.get("source_event_id")})
     represented_kernels = {item["kernel"] for item in items}
     missing_facets = [
         kernel for kernel in policy.deep_kernels
@@ -1026,6 +1042,7 @@ async def build_five_kernel_context(
         "head_versions": {
             name: value["version"] for name, value in head_payload.items()
         },
+        "teaching_guidance": teaching_guidance,
         "item_ids": [item["id"] for item in items],
         "path_keys": [
             [path["source"]["id"], path["relation"], path["target"]["id"]]
@@ -1056,10 +1073,13 @@ async def build_five_kernel_context(
         "relation_paths": relation_paths,
         "personal_concept_graph": concept_context,
         "adaptation_directives": adaptation_directives,
+        "teaching_guidance": teaching_guidance,
+        "teaching_guidance_version": GUIDANCE_VERSION,
         "missing_facets": missing_facets,
         "conflicts": conflicts,
         "resolved_updates": [path for path in relation_paths if path["relation"] == "SUPERSEDES"],
         "omitted": {
+            "teaching_guidance_budget_filtered": guidance_omitted,
             "candidate_count": len(nodes),
             "candidate_limit_per_channel": 240,
             "candidate_channels": len(channels) + 1,
@@ -1080,6 +1100,7 @@ async def build_five_kernel_context(
                 "paths": relation_paths,
                 "personal_concept_graph": concept_context,
                 "adaptation_directives": adaptation_directives,
+                "teaching_guidance": teaching_guidance,
             }),
             "answer_free": True,
             "retrieval_order": ["exact_scope", "subject_and_lexical", "one_hop_relations"],

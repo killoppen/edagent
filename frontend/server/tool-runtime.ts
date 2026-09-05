@@ -1,3 +1,4 @@
+import { compactTeachingGuidance } from '../src/teaching-guidance-context.ts'
 import { structurallyCompact } from './context-compaction.ts'
 import type {
   SearchSource,
@@ -619,6 +620,7 @@ function compactFormalLearnerContext(value: unknown) {
     resolved_updates: packet.resolved_updates || [],
     omitted: packet.omitted || {},
     adaptation_directives: packet.adaptation_directives || [],
+    teaching_guidance: compactTeachingGuidance(packet),
     missing_facets: packet.missing_facets || [],
     manifest: packet.manifest,
   }

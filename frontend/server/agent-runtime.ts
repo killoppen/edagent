@@ -1,3 +1,4 @@
+import { teachingGuidancePrompt } from '../src/teaching-guidance-context.ts'
 import { structurallyCompact } from './context-compaction.ts'
 import type {
   AgentContextEnvelope,
@@ -603,7 +604,9 @@ function envelopePrompt(envelope: AgentContextEnvelope) {
   const observationDetails = envelope.observations
     .map((observation, index) => [
       `### 观察 ${index + 1} · ${observation.source}`,
-      safeJson(observation.data, 5_000),
+      safeJson(observation.data && typeof observation.data === 'object'
+        ? Object.fromEntries(Object.entries(observation.data).filter(([key]) => key !== 'teaching_guidance'))
+        : observation.data, 5_000),
     ].join('\n'))
     .join('\n')
     .slice(0, 24_000)
@@ -636,6 +639,7 @@ function envelopePrompt(envelope: AgentContextEnvelope) {
     '学习路径必须先调用 lookup_learning_path_node 做精确读取；只有它未命中、存在错别字/近义表达或候选歧义时才调用 search_learning_path_graph。模糊结果为 ambiguous 时应呈现候选让学习者选择，不能直接形成路线。只有模糊检索明确返回 graph_gap 且联网来源已取得后，才可调用 propose_personal_path_node；提案绝不等于已写入。',
     '数据 unavailable 与已读取但为空必须区分；不得把不可用说成没有证据。记忆中的时间、范围和 self_reported/inferred 标签必须保留语义。',
     '学生问你对我的了解时，先概括当前重点与最近变化，再说明已有背景将怎样帮助本次学习；不罗列内部任务编号，不反复强调未验证。自述可指导例子与起点，不能升级能力。resolved_updates 是已经处理的修订，不是待再次确认的冲突。',
+    '动态用户上下文中的本轮教学指导来自正式五核；它优先于历史默认偏好，但学习者后续明确的新要求优先。只在所列范围和期限内调整下一步，不得据此升级掌握、跳过评分或自动推进阶段。',
     '工具失败时先依据错误类型决定重试、换工具或明确告知缺口。拿到足够证据后直接回答。',
   ].join('\n')
 }
@@ -1677,11 +1681,24 @@ export async function runTutorAgentTurn(input: TutorAgentRuntimeInput): Promise<
     requestDeadline = deadline,
     streamText = true,
   ) => {
+    // Append only bounded guidance to dynamic user context for every model
+    // invocation, including visual explanation/Brief and repair paths.
+    const guidance = teachingGuidancePrompt(input.formalLearnerContext)
+    const body = request.body as Record<string, unknown>
+    const requestWithGuidance = guidance ? {
+      ...request,
+      body: {
+        ...body,
+        ...(Array.isArray(body.messages)
+          ? { messages: [...body.messages, { role: 'user', content: guidance }] }
+          : { input: [...(Array.isArray(body.input) ? body.input : []), { role: 'user', content: guidance }] }),
+      },
+    } : request
     let lastError: unknown
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const payload = await input.invokeProvider({
-          ...request,
+          ...requestWithGuidance,
           timeoutMs: Math.max(1_000, Math.min(AI_LATENCY_BUDGETS.providerRequest, requestDeadline - Date.now())),
           onTextDelta: streamText ? emitTextDelta : undefined,
         })

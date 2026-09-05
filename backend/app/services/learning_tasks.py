@@ -268,6 +268,10 @@ async def _scoped_planner_context(
         subject_keys=[f"checkpoint:{checkpoint_id}"] if checkpoint_id else [],
         query=objective,
     )
+    # This control projection is available before long-term synthesis. A new
+    # plan must respect the current time budget/support request immediately.
+    for guidance in packet.get("teaching_guidance", []):
+        context.setdefault(guidance["kernel"], {}).setdefault("teaching_guidance", []).append(guidance)
     items = _planner_memory_items(packet)
     facts = {}
     if items:

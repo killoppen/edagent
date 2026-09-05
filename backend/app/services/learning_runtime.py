@@ -37,6 +37,7 @@ PUBLIC_EVENT_TYPES = {
 # architecture registry): the registry may declare candidate events, while
 # this set states which event names the runtime actually handles today.
 REDUCER_EVENT_TYPES = frozenset({
+    "vnext_teaching_input_received",
     "semantic_observation_proposed",
     "vnext_human_adaptation_requested",
     "memory_correction_confirmed", "memory_correction_added", "memory_correction_retracted",
@@ -285,6 +286,26 @@ async def _apply_patch(
 async def _reduce_event(db: AsyncSession, event: EvidenceEvent):
     p = dict(event.payload or {})
     et = event.event_type
+    # Hidden controls and reference-only inputs are ledger records, not learner evidence.
+    # Exit before consuming one-turn guidance or updating any other kernel reducer.
+    if et == "user_message" and p.get("direct_user_input") is False:
+        return
+
+    # Immediate guidance is a deterministic kernel projection. It does not wait
+    # for (or acquire the authority of) background Module/Claim synthesis.
+    from app.services.teaching_guidance import GUIDANCE_EVENT_TYPES, reduce_teaching_guidance
+    if et in GUIDANCE_EVENT_TYPES:
+        rows = (await db.execute(select(KernelState).where(
+            KernelState.learner_id == event.learner_id,
+        ))).scalars().all()
+        states = {row.kernel_name: {"short_term": dict(row.short_term or {}),
+                                   "long_term": dict(row.long_term or {})} for row in rows}
+        for kernel_name, patch in reduce_teaching_guidance(event, states).items():
+            await _apply_patch(db, event, kernel_name, patch.get("short_term", {}),
+                "依据当前证据即时调整教学；适用范围与期限独立于长期掌握门槛",
+                long_patch=patch.get("long_term") or None)
+    if et == "vnext_teaching_input_received":
+        return
 
     if et == "semantic_observation_proposed":
         kernel_name = p.get("kernel")
@@ -1925,7 +1946,9 @@ async def get_kernel_projection(db: AsyncSession, learner_id: int | None = None)
         # This compatibility projection has no session scope. Model candidates
         # are available only through session-filtered transient memory facts.
         short.pop("semantic_candidate", None)
+        short.pop("teaching_directives", None)
         long = dict(state.long_term or {})
+        long.pop("teaching_preferences", None)
         for kernel_name, scope, key in archived_paths:
             if kernel_name != state.kernel_name:
                 continue
