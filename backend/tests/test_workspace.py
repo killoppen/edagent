@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -549,7 +550,10 @@ def test_traversal_links_protected_paths_delete_restore_and_user_isolation(tmp_p
     (root / "delete-me.txt").write_text("recover me", encoding="utf-8")
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
-    (root / "outside-link.txt").symlink_to(outside)
+    try:
+        (root / "outside-link.txt").symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symbolic links are unavailable: {error}")
 
     with TestClient(app) as alice, TestClient(app) as bob:
         alice.post("/api/auth/register", json=registration("workspace_owner_alice"))
