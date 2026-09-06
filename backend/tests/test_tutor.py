@@ -38,6 +38,16 @@ from app.services import project_proposals as proposal_service
 from app.api.phase1 import _roadmap_planning_context
 
 
+# How long a stubbed model call blocks, and the wall clock a turn must beat when
+# the budget abandons that call. The gap between them is the whole signal: a turn
+# that waited for the model lands past SLOW_MODEL_SECONDS, one that abandoned it
+# returns in roughly the budget plus request overhead. Keep the deadline far from
+# both ends — request overhead alone approaches half a second on a loaded shared
+# CI runner, which is how a 0.5 deadline turned this into a flaky test.
+SLOW_MODEL_SECONDS = 5
+ABANDONED_MODEL_DEADLINE = 2.0
+
+
 @pytest.fixture(scope="module")
 def client():
     with TestClient(app) as test_client:
@@ -2080,7 +2090,7 @@ def test_tutor_structured_and_plain_attempts_share_one_model_budget(
             return self
 
         async def ainvoke(self, _messages):
-            await asyncio.sleep(1)
+            await asyncio.sleep(SLOW_MODEL_SECONDS)
 
     monkeypatch.setattr("app.services.tutor_service.ChatOpenAI", SlowModel)
     monkeypatch.setattr("app.services.tutor_service.settings.llm_api_key", "test-key")
@@ -2099,7 +2109,7 @@ def test_tutor_structured_and_plain_attempts_share_one_model_budget(
         },
     )
 
-    assert time.perf_counter() - started < 1
+    assert time.perf_counter() - started < ABANDONED_MODEL_DEADLINE
     assert response.status_code == 200
     assert "模型已经配置" in response.json()["message"]
     assert "超过" in response.json()["message"]
@@ -2141,7 +2151,7 @@ def test_structured_timeout_preserves_budget_for_plain_fallback(
 ):
     class SlowStructuredInvoker:
         async def ainvoke(self, _messages):
-            await asyncio.sleep(1)
+            await asyncio.sleep(SLOW_MODEL_SECONDS)
 
     class FallbackModel:
         def __init__(self, **_kwargs):
@@ -2168,7 +2178,7 @@ def test_structured_timeout_preserves_budget_for_plain_fallback(
         "client_turn_id": f"plain-reserve-{uuid.uuid4().hex}",
     })
 
-    assert time.perf_counter() - started < 0.5
+    assert time.perf_counter() - started < ABANDONED_MODEL_DEADLINE
     assert response.status_code == 200, response.text
     assert response.json()["message"] == "你好，我们可以先明确今天的目标。"
 
