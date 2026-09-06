@@ -6,6 +6,7 @@ Two-phase process:
 2. Generate: Stream each section with full content, formulas, ASCII diagrams
 """
 import json
+import logging
 import os
 import re
 from typing import AsyncGenerator, List, Dict, Optional, Any
@@ -14,6 +15,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_lecture_section_title(
@@ -503,10 +506,17 @@ class LectureAgent:
             from app.services.embedding import load_cache, embed_text, cosine_similarity
             cache = load_cache()
             if cache and len(cache) > 0:
-                query_emb = embed_text(query)
+                query_emb = await embed_text(query)
                 vector_cache = (cache, query_emb)
-        except Exception:
-            pass
+        except Exception as error:
+            from app.services.embedding import redact_credentials
+            # Provider errors can echo both a base URL carrying userinfo and
+            # the submitted text, so redact and bound what reaches the log.
+            logger.warning(
+                "Vector retrieval unavailable, falling back to keyword scoring: %s: %s",
+                type(error).__name__,
+                redact_credentials(error)[:150],
+            )
 
         for c in pool:
             meta = c.get("meta", {}) if isinstance(c.get("meta"), dict) else {}

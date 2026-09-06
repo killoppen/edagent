@@ -24,3 +24,10 @@ trafilatura==1.12.0
 sse-starlette==2.1.0
 pytest==8.3.5
 pytest-asyncio==0.25.3
+
+# Optional extra, intentionally not installed here: local embeddings need
+# sentence-transformers, which pulls in torch and would grow the packaged
+# desktop sidecar by an order of magnitude.  Install it to make the default
+# EMBEDDING_BACKEND=auto pick the free local model; without it, auto uses the
+# configured OpenAI-compatible endpoint.
+# sentence-transformers

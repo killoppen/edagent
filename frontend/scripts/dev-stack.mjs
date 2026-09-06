@@ -8,7 +8,9 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(scriptDir, '..')
 const rootDir = path.resolve(frontendDir, '..')
 const backendDir = path.join(rootDir, 'backend')
-const pythonBin = path.join(backendDir, 'venv', 'bin', 'python')
+const pythonBin = process.platform === 'win32'
+  ? path.join(backendDir, 'venv', 'Scripts', 'python.exe')
+  : path.join(backendDir, 'venv', 'bin', 'python')
 const viteBin = path.join(frontendDir, 'node_modules', 'vite', 'bin', 'vite.js')
 
 async function readLocalEnv() {
