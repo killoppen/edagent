@@ -178,6 +178,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
   }
 
   const handleNebulaWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey) return
     event.preventDefault()
     const viewport = event.currentTarget
     const oldZoom = zoom
@@ -278,7 +279,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
           )}
 
           <div className="path-canvas-toolbar">
-            <div><strong>学习星图</strong><span>基础 → 核心 → 方向 → 高阶 → 产出 · 滚轮缩放，按住空白区域拖动</span></div>
+            <div><strong>学习星图</strong><span>基础 → 核心 → 方向 → 高阶 → 产出 · 滚轮上下滑动，Ctrl+滚轮缩放，按住空白区域拖动</span></div>
             <div className="path-canvas-actions"><button type="button" className={!focusPinned ? 'active' : ''} onClick={() => setFocusPinned(false)}>全图</button><button type="button" className={focusPinned ? 'active' : ''} disabled={!selected} onClick={() => setFocusPinned(true)}>聚焦</button><i /><button type="button" onClick={() => setZoom(value => Math.max(.55, +(value - .1).toFixed(2)))} aria-label="缩小星图">−</button><span>{Math.round(zoom * 100)}%</span><button type="button" onClick={() => setZoom(value => Math.min(1.3, +(value + .1).toFixed(2)))} aria-label="放大星图">＋</button></div>
           </div>
           <div
