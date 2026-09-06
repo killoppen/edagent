@@ -130,6 +130,16 @@ function TaskRelationshipRadar({ bundle, selectedId, onSelect }: { bundle: TaskV
     for (const [id, position] of ringPositions(bundle.knowledgeSkills, 322, -Math.PI / 2 + 0.08)) result.set(id, position);
     return result;
   }, [bundle]);
+  const focusActive = selectedId !== bundle.task.id && bundle.nodes.some((node) => node.id === selectedId);
+  const relatedIds = useMemo(() => {
+    if (!focusActive) return new Set(bundle.nodes.map((node) => node.id));
+    const ids = new Set([selectedId]);
+    for (const edge of bundle.edges) {
+      if (edge.source === selectedId) ids.add(edge.target);
+      if (edge.target === selectedId) ids.add(edge.source);
+    }
+    return ids;
+  }, [bundle, focusActive, selectedId]);
 
   return (
     <div className="task-radar-panel">
@@ -146,8 +156,9 @@ function TaskRelationshipRadar({ bundle, selectedId, onSelect }: { bundle: TaskV
             const source = positions.get(edge.source);
             const target = positions.get(edge.target);
             if (!source || !target) return null;
+            const related = relatedIds.has(edge.source) && relatedIds.has(edge.target);
             return (
-              <line key={edge.id || `${edge.source}:${edge.type}:${edge.target}`} x1={source.x} y1={source.y} x2={target.x} y2={target.y} className={edge.lifecycle === "candidate" ? "candidate" : ""}>
+              <line key={edge.id || `${edge.source}:${edge.type}:${edge.target}`} x1={source.x} y1={source.y} x2={target.x} y2={target.y} className={`${edge.lifecycle === "candidate" ? "candidate" : ""} ${focusActive ? (related ? "related" : "inactive") : ""}`}>
                 <title>{relationLabels[edge.type] || edge.type}</title>
               </line>
             );
@@ -164,8 +175,8 @@ function TaskRelationshipRadar({ bundle, selectedId, onSelect }: { bundle: TaskV
           return (
             <g
               key={node.id}
-              className={`task-radar-node ${node.type} ${selectedId === node.id ? "selected" : ""}`}
-              transform={`translate(${position.x}, ${position.y})`}
+              className={`task-radar-node ${node.type} ${selectedId === node.id ? "selected" : ""} ${focusActive ? (relatedIds.has(node.id) ? "related" : "inactive") : ""}`}
+              transform={`translate(${position.x}, ${position.y})${selectedId === node.id ? " scale(1.16)" : ""}`}
               role="button"
               tabIndex={0}
               onClick={() => onSelect(node)}
@@ -183,7 +194,7 @@ function TaskRelationshipRadar({ bundle, selectedId, onSelect }: { bundle: TaskV
         <span><i className="capability-dot" />岗位能力</span>
         <span><i className="unit-dot" />能力单元</span>
         <span><i className="skill-dot" />知识技能</span>
-        <small>点击节点查看详情；虚线表示候选关系。</small>
+        <small>{focusActive ? "已高亮所选节点及一跳关联；点击任务恢复全图。" : "点击节点查看详情并放大；虚线表示候选关系。"}</small>
       </div>
     </div>
   );

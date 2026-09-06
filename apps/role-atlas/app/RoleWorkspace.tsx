@@ -837,12 +837,7 @@ export default function RoleWorkspace({ projectId, initialConversationId }: { pr
       });
       graph.on(NodeEvent.POINTER_ENTER, (event: IElementEvent) => setHoveredNodeId(String(event.target?.id || "")));
       graph.on(NodeEvent.POINTER_LEAVE, () => setHoveredNodeId(""));
-      graph.on(NodeEvent.DRAG_END, () => {
-        window.setTimeout(() => {
-          draggedRef.current = null;
-          setDraggingNode(null);
-        }, 80);
-      });
+      graph.on(NodeEvent.DRAG_END, () => setDraggingNode(draggedRef.current));
 
       await graph.render();
       graphRef.current = graph;
@@ -1387,6 +1382,13 @@ export default function RoleWorkspace({ projectId, initialConversationId }: { pr
 
       <section ref={dropRef} data-chat-drop className={`chat-pane ${chatCollapsed ? "collapsed" : ""} ${draggingNode ? "drop-ready" : ""}`}
         onDragOver={(event) => { if (draggedRef.current) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
+        onPointerUp={() => {
+          const node = draggedRef.current;
+          if (!node) return;
+          if (!conversationLoading) addReference(node);
+          draggedRef.current = null;
+          setDraggingNode(null);
+        }}
         onDrop={(event) => {
           const node = draggedRef.current;
           if (!node) return;

@@ -50,3 +50,27 @@ test("典型任务工作台提供关系雷达、事理流程、证据与引用�
   assert.match(html, /引用任务/);
   assert.match(html, /知识点 \/ 技能点/);
 });
+
+test("关系雷达聚焦节点时放大选中项并高亮一跳关系", () => {
+  const html = renderToStaticMarkup(createElement(TaskWorkspace, {
+    nodes,
+    edges,
+    workProcess: processPayload,
+    taskId: "task:T-03",
+    query: "",
+    selectedId: "ks:K-09",
+    perspective: "relations" as const,
+    onTaskChange() {},
+    onPerspectiveChange() {},
+    onSelect() {},
+    onReference() {},
+    onDragStart() {},
+    onDragEnd() {},
+    onOpenEvidence() {},
+  }));
+
+  assert.match(html, /task-radar-node knowledge_skill selected related/);
+  assert.match(html, /scale\(1\.16\)/);
+  assert.match(html, /task-radar-edges/);
+  assert.match(html, /已高亮所选节点及一跳关联/);
+});
