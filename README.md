@@ -50,6 +50,8 @@ npm run build
 
 Role Atlas 负责岗位图谱冷启动、迭代、审核、发布和 Graph Hub 发现；LearnFlow 只消费带固定版本与完整性身份的岗位包。两者共用同一 Git 仓库，但保持独立依赖、存储和运行边界。
 
+LearnFlow 主界面的侧栏提供 `Role Atlas` 入口。入口只打开独立的 Role Atlas 管理应用，不把岗位图谱生产逻辑或状态写入 LearnFlow；默认地址为 `http://localhost:3000/`，部署时可通过前端构建变量 `VITE_ROLE_ATLAS_URL` 覆盖。
+
 ```bash
 cd apps/role-atlas
 npm ci

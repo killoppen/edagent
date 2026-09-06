@@ -61,6 +61,7 @@ import {
   type TutorToolChoice,
   type TutorToolRun,
 } from './tooling'
+import { resolveRoleAtlasUrl } from './role-atlas-entry'
 import ComposerCapabilityPicker from './ComposerCapabilityPicker'
 import AuthGate, { type AuthGateSession } from './AuthGate'
 import DesktopPet from './DesktopPet.tsx'
@@ -474,6 +475,18 @@ async function openDesktopPet(
   } finally {
     desktopPetOpening = undefined
   }
+}
+
+async function openRoleAtlas() {
+  const url = resolveRoleAtlasUrl(import.meta.env.VITE_ROLE_ATLAS_URL)
+  if (isDesktopRuntime()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('open_external_url', { url })
+      return
+    } catch {}
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 function chatTab(conversation: Conversation): WorkspaceTab {
@@ -3578,6 +3591,7 @@ function App({ auth }: { auth: AuthGateSession }) {
             <button type="button" onClick={() => openTab(REVIEW_TAB)}><span>↺</span>复习与错题</button>
             <button type="button" onClick={() => openTab(TASKS_TAB)}><span>☷</span>学习任务</button>
             <button type="button" onClick={() => openTab(LEARNING_PATH_TAB)}><span>⌁</span>学习路径</button>
+            <button type="button" onClick={() => void openRoleAtlas()}><span>◇</span>Role Atlas</button>
             {isDesktopRuntime() && <button type="button" onClick={() => void openDesktopPet(activeConversation?.formalSessionId)}><span>◌</span>打开桌宠</button>}
           </nav>
           <div className="sidebar-scroll-area">

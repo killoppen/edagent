@@ -17,7 +17,7 @@
     "test:planning": "node --experimental-strip-types --test server/planning.test.ts",
     "test:profile": "node --experimental-strip-types --test server/five-kernel-profile.test.ts server/profile-presentation.test.ts",
     "test:path": "node --experimental-strip-types --test server/learning-path-graph.test.ts server/learning-path-production-eval.test.ts server/learning-path-contract-v2.test.ts",
-    "test:formal": "node --experimental-strip-types --test server/formal-runtime.test.ts server/project-sidebar.test.ts server/review-runtime.test.ts",
+    "test:formal": "node --experimental-strip-types --test server/formal-runtime.test.ts server/project-sidebar.test.ts server/review-runtime.test.ts server/role-atlas-entry.test.ts",
     "test:auth": "node --experimental-strip-types --test server/auth-runtime.test.ts server/account-model-credential.test.ts server/password-policy.test.ts",
     "test:plugins": "node --experimental-strip-types --test server/plugin-api.test.ts server/role-capability-plugin.test.ts server/role-package-file-import.test.ts server/role-package-hub-import.test.ts server/tool-capability-catalog.test.ts server/learning-task-conversion-plugin.test.ts server/learning-task-conversion-intake.test.ts",
     "role:import-file": "node --experimental-strip-types scripts/import-role-package-file.mjs",
