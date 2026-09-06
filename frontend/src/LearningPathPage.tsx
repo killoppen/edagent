@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 
 import {
   LEARNING_PATH_SOURCES,
@@ -35,6 +35,12 @@ type Props = {
   onArchivePlan: (planId: string) => void
 }
 
+type NebulaPanState = {
+  pointerId: number
+  x: number
+  y: number
+}
+
 const STATUS_ORDER: LearnerPathStatus[] = ['unmarked', 'exploring', 'self_reported_exposed', 'self_reported_mastered']
 const AUDIENCE_LABELS: Record<string, string> = {
   vocational: '高职', undergraduate: '本科', graduate: '研究生', self_directed: '自主学习',
@@ -47,6 +53,7 @@ function compact(value: string) {
 export default function LearningPathPage({ state, onStatusChange, onAddPersonalNode, onRemovePersonalNode, onArchivePlan }: Props) {
   const projection = useMemo(() => projectLearnerPath(state), [state])
   const canvasScrollRef = useRef<HTMLDivElement>(null)
+  const nebulaPanRef = useRef<NebulaPanState | null>(null)
   const [query, setQuery] = useState('')
   const [clusterFilter, setClusterFilter] = useState<'all' | KnowledgeClusterId>('all')
   const [audience, setAudience] = useState('全部')
@@ -55,6 +62,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
   const [focusPinned, setFocusPinned] = useState(false)
   const [showSources, setShowSources] = useState(false)
   const [zoom, setZoom] = useState(.82)
+  const [isPanning, setIsPanning] = useState(false)
   const [personalTitle, setPersonalTitle] = useState('')
   const [anchorId, setAnchorId] = useState('machine-learning')
   const [edgeKind, setEdgeKind] = useState<PathEdgeKind>('soft_prerequisite')
@@ -123,7 +131,51 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
     const left = Math.max(0, (position.x + position.width / 2) * zoom - viewport.clientWidth / 2)
     const top = Math.max(0, (position.y + position.height / 2) * zoom - viewport.clientHeight / 2)
     viewport.scrollTo({ left, top, behavior: 'smooth' })
-  }, [selected?.id, nebulaPositions, zoom])
+  }, [selected?.id, nebulaPositions])
+
+  const handleNebulaPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target instanceof HTMLElement && event.target.closest('button, a, input, select, textarea'))) return
+    const viewport = event.currentTarget
+    nebulaPanRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+    viewport.setPointerCapture(event.pointerId)
+    setIsPanning(true)
+  }
+
+  const handleNebulaPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = nebulaPanRef.current
+    if (!pan || pan.pointerId !== event.pointerId) return
+    const viewport = event.currentTarget
+    viewport.scrollLeft -= event.clientX - pan.x
+    viewport.scrollTop -= event.clientY - pan.y
+    nebulaPanRef.current = { pointerId: pan.pointerId, x: event.clientX, y: event.clientY }
+  }
+
+  const stopNebulaPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = nebulaPanRef.current
+    if (!pan || pan.pointerId !== event.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    nebulaPanRef.current = null
+    setIsPanning(false)
+  }
+
+  const handleNebulaWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const viewport = event.currentTarget
+    const oldZoom = zoom
+    const nextZoom = Math.min(1.3, Math.max(.55, +(oldZoom * Math.exp(-event.deltaY * .0015)).toFixed(2)))
+    if (nextZoom === oldZoom) return
+    const bounds = viewport.getBoundingClientRect()
+    const localX = event.clientX - bounds.left
+    const localY = event.clientY - bounds.top
+    const contentX = (viewport.scrollLeft + localX) / oldZoom
+    const contentY = (viewport.scrollTop + localY) / oldZoom
+    setZoom(nextZoom)
+    requestAnimationFrame(() => {
+      if (canvasScrollRef.current !== viewport) return
+      viewport.scrollLeft = contentX * nextZoom - localX
+      viewport.scrollTop = contentY * nextZoom - localY
+    })
+  }
 
   const addManualNode = () => {
     const title = personalTitle.trim()
@@ -207,10 +259,18 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
           )}
 
           <div className="path-canvas-toolbar">
-            <div><strong>学习星图</strong><span>基础 → 核心 → 方向 → 高阶 → 产出</span></div>
+            <div><strong>学习星图</strong><span>基础 → 核心 → 方向 → 高阶 → 产出 · 滚轮缩放，按住空白区域拖动</span></div>
             <div className="path-canvas-actions"><button type="button" className={!focusPinned ? 'active' : ''} onClick={() => setFocusPinned(false)}>全图</button><button type="button" className={focusPinned ? 'active' : ''} disabled={!selected} onClick={() => setFocusPinned(true)}>聚焦</button><i /><button type="button" onClick={() => setZoom(value => Math.max(.55, +(value - .1).toFixed(2)))} aria-label="缩小星图">−</button><span>{Math.round(zoom * 100)}%</span><button type="button" onClick={() => setZoom(value => Math.min(1.3, +(value + .1).toFixed(2)))} aria-label="放大星图">＋</button></div>
           </div>
-          <div className="path-canvas-scroll" ref={canvasScrollRef}>
+          <div
+            className={`path-canvas-scroll${isPanning ? ' is-panning' : ''}`}
+            ref={canvasScrollRef}
+            onWheel={handleNebulaWheel}
+            onPointerDown={handleNebulaPointerDown}
+            onPointerMove={handleNebulaPointerMove}
+            onPointerUp={stopNebulaPan}
+            onPointerCancel={stopNebulaPan}
+          >
             <div className="path-zoom-stage" style={{ width: NEBULA_WIDTH * zoom, height: nebulaCanvasHeight * zoom }}>
             <div className="path-canvas path-nebula" style={{ width: NEBULA_WIDTH, height: nebulaCanvasHeight, transform: `scale(${zoom})` }}>
               <div className="nebula-field-label"><span>LEARNING CONSTELLATION</span><strong>语义成团，阶段成路</strong><small>悬停看一跳 · 点击固定完整前置与后继链</small></div>
