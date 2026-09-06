@@ -1,3 +1,6 @@
+import { OFFICIAL_PATH_CONTENT } from './official-learning-path-content.ts'
+import { upgradeOfficialPathGraph, type LearningPathGraphV2 } from './learning-path-contract-v2.ts'
+import { LEARNING_PATH_PROTOCOL_VERSION, type LearningPathGraphContract } from './learning-path-protocol.ts'
 import {
   extractLearningPathTopic,
   lookupExactLearningPath,
@@ -453,11 +456,14 @@ const n = (
     ? ['undergraduate', 'graduate', 'self_directed']
     : ['undergraduate', 'self_directed'],
   summary = `${title}的核心概念、方法与基本实践。`,
-): LearningPathNode => ({
-  id, title, summary: summary.trim() || `${title}的核心概念、方法与基本实践。`, aliases, domains, audiences, stage, order,
+): LearningPathNode => {
+  const curatedSummary = OFFICIAL_PATH_CONTENT[id]?.summary || summary.trim() || `${title}的核心概念、方法与基本实践。`
+  return {
+  id, title, summary: curatedSummary, aliases, domains, audiences, stage, order,
   origin: 'official', sourceKind: 'official_catalog', sourceRefs: sources,
-  semantics: [{ id: `official:${id}:summary`, kind: 'official', text: summary.trim() || `${title}的核心概念、方法与基本实践。`, sourceRef: sources[0] }],
-})
+  semantics: [{ id: `official:${id}:summary`, kind: 'official', text: curatedSummary, sourceRef: sources[0] }],
+  }
+}
 
 export const OFFICIAL_PATH_NODES: LearningPathNode[] = [
   n('digital-literacy', '信息技术与数字素养', 0, 'foundation', ['通识', '高职'], ['计算机基础', '信息技术基础'], ['moe-vocational-2025'], ['vocational', 'undergraduate', 'self_directed']),
@@ -763,6 +769,35 @@ export const OFFICIAL_PATH_EDGES: LearningPathEdge[] = [
   e('advanced-algorithms', 'thesis-research', 'soft_prerequisite', '理论方向研究常需高阶算法能力'),
   e('advanced-systems', 'thesis-research', 'soft_prerequisite', '系统方向研究常需高阶系统背景'),
 ]
+
+export const OFFICIAL_PATH_GRAPH_REF = { graphId: 'learnflow:computing', revision: '2026-09-06.1' } as const
+
+export function exportOfficialLearningPathContractV2(): LearningPathGraphV2 {
+  return upgradeOfficialPathGraph(
+    exportOfficialLearningPathContract(), LEARNING_PATH_SOURCES, OFFICIAL_PATH_GRAPH_REF,
+    OFFICIAL_PATH_CONTENT,
+  )
+}
+
+export function exportOfficialLearningPathContract(): LearningPathGraphContract {
+  return {
+    protocolVersion: LEARNING_PATH_PROTOCOL_VERSION,
+    nodes: OFFICIAL_PATH_NODES.map(node => ({
+      id: node.id,
+      title: node.title,
+      summary: node.summary,
+      aliases: [...node.aliases],
+      domains: [...node.domains],
+      audiences: [...node.audiences],
+      stage: node.stage,
+      order: node.order,
+      origin: node.origin,
+      sourceRefs: [...node.sourceRefs],
+      ...(node.sourceProposalId ? { sourceProposalId: node.sourceProposalId } : {}),
+    })),
+    edges: OFFICIAL_PATH_EDGES.map(edge => ({ ...edge })),
+  }
+}
 
 function stableHash(value: string) {
   let hash = 2166136261

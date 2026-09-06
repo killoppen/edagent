@@ -28,6 +28,10 @@ output/playwright/
 *.log
 data/
 
+# Reviewed Role Atlas static source fixtures
+!/apps/role-atlas/public/data/
+!/apps/role-atlas/public/data/**
+
 # Project-mode runtime (venv + workspaces)
 backend/runtime/
 # Build artifacts & backups
