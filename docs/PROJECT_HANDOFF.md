@@ -4,7 +4,7 @@
 > 仓库：`D:\jbgs\all`
 > 远程：`https://github.com/killoppen/edagent.git`
 > 当前分支：`codex/migrate-role-atlas`
-> 当前 HEAD：`1d3257396d40f60114e6ab3d379569ae7103f303`
+> 当前 HEAD：`734752d1c81df320f3b19eba65d61f87c72d38d4`
 > 当前目标：桌面版 LearnFlow；浏览器开发模式只作为共用前端和调试入口
 
 本文描述生成时实际存在的代码、提交、测试和远程状态。接手前先执行 `git status -sb`。当前工作树中有一项用户已有改动：`desktop/src-tauri/Cargo.toml` 被 Git 标记为修改，不能重置、覆盖、格式化或顺手提交。
@@ -228,8 +228,8 @@ Role Atlas 要求 Node.js `>=22.13.0`；真实模型和联网冷启动需要相�
 | Role Atlas 测试、类型检查、直接 `npx vinext build` | 已通过（迁移后 140+ 测试，具体数量随提交变化） |
 | `git diff --check` | 已通过 |
 | Rust：`rustup run stable cargo check --no-default-features` | 已通过 |
-| PR #8 `verify` | GitHub 已成功 |
-| PR #8 Windows/macOS internal package | 本文生成时仍在运行，不能提前视为通过 |
+| PR #8 合并前基线 `1d32573` 的 `verify` | GitHub 已成功 |
+| PR #8 当前头 `734752d` 的检查 | 推送后尚未返回新的 check runs，不能提前视为通过 |
 
 未完成或需要真实环境补验：
 
@@ -243,11 +243,11 @@ Role Atlas 要求 Node.js `>=22.13.0`；真实模型和联网冷启动需要相�
 
 ## 10. Git、PR 与接手顺序
 
-当前分支已经把 `origin/main`（`0d2e706`）作为合并提交的第二父提交纳入，PR #8 为：
+当前分支在合并提交 `1d32573` 中把当时的 `origin/main`（`0d2e706`）作为第二父提交纳入；文档提交后远程 `main` 已前进到 `2c2ee51`，因此后续合并前必须重新同步 base。PR #8 为：
 
 `https://github.com/killoppen/edagent/pull/8`
 
-截至本文生成时：PR open、`mergeable=true`、`verify` 已成功，Windows/macOS internal package 仍运行中。不要在内部打包检查完成前宣称 PR 全部通过；也不要把本地 `main` 分支当作最新基线，应以 `origin/main` 为准。
+截至文档提交后：PR open，GitHub API 报告 `mergeable=false`、`mergeable_state=dirty`，新提交尚未返回完整检查结果。不要自行 merge；也不要把本地 `main` 分支当作最新基线，应先 fetch 并以最新 `origin/main` 为准。
 
 推荐接手顺序：
 
