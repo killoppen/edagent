@@ -4,6 +4,10 @@ export function mayManageProject(ownerSubjectId: string | null, actor: ProjectAc
   return actor.role === "admin" || Boolean(ownerSubjectId && ownerSubjectId === actor.subjectId);
 }
 
+export function mayViewProject(ownerSubjectId: string | null, actor: ProjectActor) {
+  return actor.role === "admin" || Boolean(ownerSubjectId && ownerSubjectId === actor.subjectId);
+}
+
 export function projectLifecycleStatements(d1: D1Database, input: { projectId: string; actor: ProjectActor; action: "delete" | "restore"; now: string }) {
   const { projectId, actor, action, now } = input;
   const restoring = action === "restore";

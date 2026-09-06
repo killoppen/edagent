@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { bootstrapAgentDeveloperProject } from "@/lib/projects/bootstrap";
 import { createProject, listProjects } from "@/lib/projects/repository";
-import { projectActor } from "@/lib/projects/lifecycle-api";
+import { isLocalPreviewRequest, projectActor } from "@/lib/projects/lifecycle-api";
 
 export const runtime = "edge";
 
@@ -13,10 +13,12 @@ const createSchema = z.object({
   market: z.string().min(1).max(120).default("中国大陆"),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     await bootstrapAgentDeveloperProject();
-    return Response.json({ projects: await listProjects() });
+    const actor = process.env.LEARNFLOW_BASE_URL || isLocalPreviewRequest(request) ? await projectActor(request) : null;
+    if (actor instanceof Response) return actor;
+    return Response.json({ projects: await listProjects(actor || undefined) });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "项目列表读取失败。" }, { status: 500 });
   }
@@ -26,7 +28,7 @@ export async function POST(request: Request) {
   try {
     const input = createSchema.parse(await request.json());
     // A local single-user preview may have no identity bridge. Such unowned projects remain admin-only for deletion.
-    const actor = process.env.LEARNFLOW_BASE_URL ? await projectActor(request) : null;
+    const actor = process.env.LEARNFLOW_BASE_URL || isLocalPreviewRequest(request) ? await projectActor(request) : null;
     if (actor instanceof Response) return actor;
     const created = await createProject({ ...input, ownerSubjectId: actor?.subjectId });
     return Response.json(created, { status: 201 });

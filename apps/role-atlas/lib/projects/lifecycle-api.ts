@@ -1,6 +1,9 @@
 import { ensureAppSchema, getD1 } from "@/db";
 import { resolveLearnFlowIdentity } from "@/lib/integrations/learnflow/auth";
 import { mayManageProject, projectLifecycleStatements, type ProjectActor } from "./lifecycle";
+import { isLocalPreviewRequest, localPreviewActor } from "./local-preview";
+
+export { isLocalPreviewRequest } from "./local-preview";
 
 export async function projectActor(request: Request): Promise<ProjectActor | Response> {
   const origin = request.headers.get("origin");
@@ -8,7 +11,11 @@ export async function projectActor(request: Request): Promise<ProjectActor | Res
   if (process.env.ROLE_ATLAS_PUBLIC_URL) allowed.push(new URL(process.env.ROLE_ATLAS_PUBLIC_URL).origin);
   if (origin && !allowed.includes(origin)) return Response.json({ error: "不允许跨站管理岗位项目。" }, { status: 403 });
   const baseUrl = process.env.LEARNFLOW_BASE_URL;
-  if (!baseUrl) return Response.json({ error: "尚未配置身份服务，项目删除和恢复暂不可用。" }, { status: 503 });
+  if (!baseUrl) {
+    const actor = localPreviewActor(request);
+    if (actor) return actor;
+    return Response.json({ error: "尚未配置身份服务，项目删除和恢复暂不可用。" }, { status: 503 });
+  }
   const identity = await resolveLearnFlowIdentity({ request, baseUrl });
   if (!identity) return Response.json({ error: "请先登录 LearnFlow 后管理岗位项目。" }, { status: 401 });
   return identity;

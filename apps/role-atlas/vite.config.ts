@@ -36,6 +36,7 @@ export default defineConfig(async ({ mode }) => {
     "LEARNFLOW_PUBLIC_URL",
     "ROLE_PACKAGE_LAUNCH_SECRET",
     "ROLE_ATLAS_PUBLIC_URL",
+    "ROLE_ATLAS_LOCAL_MANAGEMENT",
     "GRAPH_HUB_PUBLIC_URL",
   ] as const;
   const vars = Object.fromEntries(allowedRuntimeKeys.flatMap((key) => localEnv[key] ? [[key, localEnv[key]]] : []));

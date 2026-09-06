@@ -9,6 +9,7 @@ import { normalizeRolePackage } from "@/lib/packages/role-package-manifest";
 import type { RiskEvent, RiskRunRequest, RiskRunResult } from "@/lib/risk/types";
 import { commitProjectVersion } from "@/lib/versioning/commit";
 import { assistantMessageFromEvents } from "./message-persistence";
+import type { ProjectActor } from "./lifecycle";
 
 export type StoredProjectSummary = {
   id: string;
@@ -45,11 +46,13 @@ function safeArray(value: string) {
   }
 }
 
-export async function listProjects(): Promise<StoredProjectSummary[]> {
+export async function listProjects(actor?: ProjectActor): Promise<StoredProjectSummary[]> {
   await ensureAppSchema();
   const db = getDb();
   const [projectRows, conversationRows] = await Promise.all([
-    db.select().from(projects).where(isNull(projects.deletedAt)).orderBy(desc(projects.updatedAt)),
+    db.select().from(projects).where(actor && actor.role !== "admin"
+      ? and(isNull(projects.deletedAt), eq(projects.ownerSubjectId, actor.subjectId))
+      : isNull(projects.deletedAt)).orderBy(desc(projects.updatedAt)),
     db.select().from(conversations).orderBy(desc(conversations.updatedAt)),
   ]);
   return projectRows.map((project) => ({
