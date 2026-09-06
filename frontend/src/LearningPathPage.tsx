@@ -137,7 +137,8 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
 
   const handleNebulaPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
-    event.preventDefault()
+    const isInteractiveTarget = event.target instanceof HTMLElement && event.target.closest('button, a, input, select, textarea')
+    if (!isInteractiveTarget) event.preventDefault()
     const viewport = event.currentTarget
     nebulaPanRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false }
     viewport.setPointerCapture(event.pointerId)
