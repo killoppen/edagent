@@ -1,63 +1,41 @@
 # LearnFlow 项目交接文档
 
-> 更新时间：2026-09-04（Asia/Shanghai）
-> 适用仓库：`D:\jbgs\all`
-> 当前分支：`feat/desktop-pet-migration`
-> 当前 HEAD：`0a9070c`
-> 发布远程：`https://github.com/killoppen/edagent.git`
+> 更新时间：2026-09-06（Asia/Shanghai）
+> 仓库：`D:\jbgs\all`
+> 远程：`https://github.com/killoppen/edagent.git`
+> 当前分支：`codex/migrate-role-atlas`
+> 当前 HEAD：`1d3257396d40f60114e6ab3d379569ae7103f303`
+> 当前目标：桌面版 LearnFlow；浏览器开发模式只作为共用前端和调试入口
 
-本文以生成时的真实工作树、已提交历史和最近验证结果为准。桌宠已经迁移进桌面端主链路；当前工作树仍有用户/本轮未提交改动，接手时必须先审阅 `git status -sb` 和 `git diff`，不得重置或覆盖这些改动。
+本文描述生成时实际存在的代码、提交、测试和远程状态。接手前先执行 `git status -sb`。当前工作树中有一项用户已有改动：`desktop/src-tauri/Cargo.toml` 被 Git 标记为修改，不能重置、覆盖、格式化或顺手提交。
 
-## 1. 项目概览
+## 1. 产品定位
 
-LearnFlow 是面向计算机学习的 Tutor 工作空间，包含：
+LearnFlow 是一个以 Tutor 对话为中心的计算机学习工作空间，正式产品目标是桌面端：
 
-- FastAPI + SQLAlchemy async + SQLite 后端；
-- React + Vite + TypeScript 前端；
-- Tauri 2 桌面壳；
-- 本地 FastAPI sidecar，桌面端启动时绑定随机 loopback 端口；
-- 浏览器端和桌面端共用正式 Tutor、Session、LearningTask、SkillRun、Review 与 LearningFile 对象。
+- 后端：FastAPI、SQLAlchemy async、SQLite；
+- 前端：React、Vite、TypeScript；
+- 桌面壳：Tauri 2；
+- 桌面运行时：Tauri 启动本地 FastAPI sidecar，绑定随机 loopback 端口；
+- 浏览器模式：复用同一套前端、API 和学习对象，用于开发、调试和无桌面环境验收。
 
-`LearnFlow-pet` 仅作为桌宠迁移的原始参考实现。它与本仓库保持独立，不是持续合并上游，也不共享数据库、凭据或状态权威。
+项目围绕“对话—工具—学习状态—可验证产物”闭环，不把 Role Atlas 或桌宠当成第二套学习状态系统。
 
-## 2. 当前 Git 状态
+## 2. 架构红线
 
-已提交的最近桌宠相关提交包括：
+### 2.1 三类主 Agent
 
-- `ad0f600`：桌宠桌面壳主链路；
-- `ee0bcfa`：账户级视觉模型设置；
-- `0284ce9`：兼容非标准 Spark Chat 响应；
-- `2cc8f53`：兼容当前 OpenAI SDK 的 legacy response；
-- `0a9070c`：视觉凭据测试使用有效尺寸图片。
-
-生成本文时，以下文件仍有未提交改动：
-
-- `backend/app/services/architecture_registry.py`：注册表版本升至 `2026-09-03.3`，登记原生选区读取与视觉回退语义；
-- `backend/tests/test_architecture_registry.py`：同步注册表版本断言；
-- `desktop/src-tauri/src/lib.rs`：记录原前台窗口、优先系统复制、三次重试、剪贴板恢复和视觉回退；
-- `frontend/src/DesktopPet.tsx`：消费原生文本结果、紧凑模式响应快捷键、移除手动“截图文字 OCR”入口；
-- `docs/ARCHITECTURE_AUTHORITY.md`：补充 `2026-09-03.3` Contract impact；
-- `docs/AGENT_ARCHITECTURE_GUIDE.md`：补充桌宠选区读取契约说明。
-
-本交接文档也属于本轮新增文件。没有在本轮自动 commit 或 push；后续发布目标仍是 `origin/feat/desktop-pet-migration`，但提交前应先审阅上述混合工作树。
-
-## 3. 架构约束
-
-### 3.1 三类主 Agent
-
-LearnFlow 只有三类主责任接口：
-
-| Agent | 责任 |
+| 主 Agent | 责任 |
 | --- | --- |
-| `tutor_agent` | 意图、对话、Action、工作台协调和 handoff |
-| `learning_design_agent` | 路线、内容、问题、评估规格和视觉产物 |
+| `tutor_agent` | 用户意图、对话、Action Board、工作台协调和 handoff |
+| `learning_design_agent` | 学习路线、内容、问题、评估规格和视觉教学产物 |
 | `practice_agent` | 提交、测试、判题、反馈、诊断追问和纠错呈现 |
 
-桌宠是 `tutor_agent` 的桌面工作台入口，不是第四类主 Agent。
+Role Atlas、Graph Hub、桌宠和学习星图都是工作台、工具或产品能力，不是第四类主 Agent。
 
-### 3.2 五核与证据写入
+### 2.2 五核与证据写回
 
-五核是学习者状态维度：`structure`、`knowledge`、`human`、`value`、`practice`。唯一合法的状态写入链为：
+五核是学习者状态维度：`structure`、`knowledge`、`human`、`value`、`practice`。唯一合法的长期状态写入链为：
 
 ```text
 用户 / UI / Tool / Agent 行为
@@ -68,134 +46,134 @@ LearnFlow 只有三类主责任接口：
   -> MemoryFact -> MemoryModule -> MemoryClaim
 ```
 
-桌宠上下文、图片观察、选区文字、导航和桌宠生命周期均不直接写 `KernelState`、`Memory Graph` 或 `EvidenceEvent`。桌宠临时上下文必须经过用户确认，并且只随一个正式 Tutor 回合消费。
+Role Atlas 的检索、岗位图谱、冷启动结果、雷达图、学习星图的展示以及视觉模型生成内容，不能直接写 `KernelState`、`EvidenceEvent` 或长期画像。需要改变学习状态时必须走已登记的事件和 reducer。
 
-### 3.3 注册表入口
+机器可读权威是 `backend/app/services/architecture_registry.py`（当前版本 `2026-09-06.2`），语义规范见 `docs/ARCHITECTURE_AUTHORITY.md` 与 `docs/AGENT_ARCHITECTURE_GUIDE.md`。
 
-桌宠能力已经登记在 `backend/app/services/architecture_registry.py` 与 `backend/app/services/action_board.py`：
+## 3. 功能版图与模块关系
 
-- Tool：`desktop_pet_gateway`、`desktop_pet_vision_observer`；
-- Workbench：`desktop_pet`，入口 `tauri://pet`；
-- Capability：`desktop_pet_companion`、`desktop_pet_task_control`、`desktop_pet_main_navigation`、`desktop_pet_context_attachment`；
-- 重要实现绑定：`api:pet.bootstrap`、`api:pet.context`、`api:pet.selection_text`、`py:pet.image_observation`。
-
-修改上述架构热点时，需要同步实现、测试、文档和注册表版本，并在提交说明中写明 `Contract impact`。
-
-## 4. 桌宠架构与数据流
+### 3.1 主链路
 
 ```text
-主窗口登录
-  -> 账户响应返回 desktop_auth_token + 短效 desktop_pet_capability_token
-  -> Tauri 主进程保存 capability 和正式 session_id
-  -> 运行时创建独立 WebViewWindow(label = "pet")
-  -> pet 通过受限 capability 调用 /api/pet/* 与正式 Tutor Session
-  -> 用户确认的临时 context_refs 随一个 restricted Tutor turn 消费
+桌面窗口 / 对话栏
+  -> Tutor Runtime
+  -> 已登记插件工具或工作台
+  -> 结构化 ToolRun / Renderer
+  -> 用户确认的 Action 或学习对象变更
+  -> EvidenceEvent（如确实改变学习状态）
+  -> 五核与 Memory Graph
 ```
 
-### 4.1 Tauri/sidecar
+普通检索、图谱推荐、Role Atlas 读取和视觉观察默认是只读或临时上下文；它们不会因为“生成了文本”就自动成为掌握证据。
 
-- 主窗口 label 为 `main`，桌宠窗口 label 为 `pet`；两者共用 `index.html`，由 `frontend/src/main.tsx` 按窗口 label 分流。
-- `openDesktopPet()` 运行时创建无边框、透明、置顶、跳过任务栏的 `360×520` 桌宠窗口。
-- Tauri 启动 sidecar 时生成桌面 token、随机 loopback 端口和独立应用数据目录。
-- sidecar 数据包括桌面数据库、`settings.env`、来源缓存、上传文件目录、插件制品目录和 `desktop-pet-settings.json`；这些目录不属于用户项目工作区。
-- pet 关闭事件被拦截为隐藏，重新打开时复用同一窗口；窗口位置与尺寸会持久化，并在无效显示器坐标时回退。
-- Windows 支持单实例唤醒、系统托盘、鼠标穿透恢复和全局快捷键监听。
+### 3.2 功能关系表
 
-### 4.2 认证与权限
+| 功能板块 | 主要入口 | 依赖 | 输出及边界 |
+| --- | --- | --- | --- |
+| Tutor 对话 | 主窗口对话栏 | Tutor Runtime、插件目录、Action Board | 回复、工具结果、待确认提案；状态写入受证据链约束 |
+| 学习路径 | `frontend/src/LearningPathPage.tsx`、`/learning-path` | 官方节点、个人节点、计划 API、学习星图布局 | 路径状态、节点简介/语义、计划提案；确认后才写正式路径 |
+| Graph Hub | 对话工具 `search_graph_hub`、图谱推荐 Renderer | Role Package 目录、主体可见性和匹配器 | 按图谱类型、名称和命中节点筛选推荐；只读，不自动选择图谱 |
+| Role Atlas | `apps/role-atlas/`，对话结果中的外部入口 | 静态 Role Package、BuildRun、冷启动/迭代 Skill | 岗位包研究、版本化快照、工作过程和岗位包引用；不维护 LearnFlow 五核 |
+| 岗位能力雷达 | Role Atlas 图谱视图 | 节点、边、关联关系 | 选中节点放大、关联高亮、无关内容淡化、节点/过程拖入对话 |
+| 视频学习 | `search_learning_videos` → `inspect_learning_video` | 联网候选、字幕/时间点/目标覆盖核验 | 在对话或学习任务中展示候选；搜索/播放不是掌握证据，也不是独立顶层状态 |
+| 桌宠 | Tauri `pet` 窗口、托盘和快捷键 | 受限 `lfpet_` capability、正式 Tutor Session | 任务/复习、文本/图片/文档/字幕/选区临时上下文；一次确认只消费一个 Tutor 回合 |
+| 项目/任务/复习 | 主窗口工作台 | 正式 Project、LearningTask、SkillRun、Review | 进度、提交、复习和纠错闭环；由正式 Tutor/Practice 链路驱动 |
 
-桌宠使用 `lfpet_` 短效 capability，而不是主窗口 bearer：
+## 4. Role Atlas 同仓现状
 
-- TTL：10 分钟；绑定账户、learner、父 `AuthSession` 和 `auth_epoch`；服务端只保存 token hash；
-- capability scope：`pet.bootstrap.read`、`pet.session.read`、`pet.tutor.turn`、`pet.task.read`、`pet.task.control`、`pet.skill.control`、`pet.review.read`、`pet.file.read`、`pet.context.write`；
-- URL 到 scope 的白名单在认证入口强制执行，普通 bearer 不能借用 `/api/pet/*` 的受限身份；
-- 登出、会话撤销、账户 `auth_epoch` 变化或 capability 过期后，pet 身份失效并隐藏窗口。
+### 4.1 用途和边界
 
-### 4.3 临时上下文
+Role Atlas 是岗位研究与岗位包生产工具，不是用户每次学习都必须打开的页面。它把一个静态、版本化的 `Role Package` 作为岗位事实源；岗位图谱、岗位卡片、JD、学习路径投影、对话上下文和报告都从岗位包投影而来。
 
-当前支持的上下文类型：`text`、`ocr_text`、`image_observation`、`document_excerpt`、`video_transcript`。
+当前内置岗位包为“大模型应用工程师” `1.2.0`，快照时点 `2026-08-19`。同仓源码在 `apps/role-atlas/`，说明见 `apps/role-atlas/README.md` 和 `docs/implementation/2026-09-04-role-atlas-monorepo.md`。
 
-生命周期为：
+### 4.2 入口和调用关系
 
-```text
-创建 pending 包
-  -> 前端预览
-  -> 用户确认并绑定正式 Session
-  -> Tutor restricted turn 携带最多 3 个 context_refs
-  -> 成功后标记 consumed、清除正文
-```
+- LearnFlow 侧边栏已有 `Role Atlas` 入口，使用 `frontend/src/role-atlas-entry.ts` 解析配置地址；默认本地地址为 `http://localhost:3000/`。
+- 浏览器端使用普通 HTTP(S) 外链；桌面端通过受限 Tauri `open_external_url` 命令交给系统默认浏览器，协议仅允许 HTTP/HTTPS。
+- 当岗位包目录没有匹配项时，Graph Hub 结果提供进入 Role Atlas 研究的入口；LearnFlow 不会偷偷使用无关岗位包代替用户选择。
+- 用户明确选择岗位包后，必须保留 `packageId`、`packageVersion`、`snapshotId` 和 `rootHash`，后续岗位读取使用精确 selector。
 
-上下文默认 TTL 为 15 分钟，最大 30 分钟，正文上限 12,000 字。过期、删除或消费后正文清空，只保留有限 provenance receipt；原文不会进入 `AgentMessage`、`EvidenceEvent` 或长期记忆。重复图片请求通过 `client_context_id` 幂等。
+### 4.3 已覆盖的 Role Atlas 能力
 
-## 5. 已交付功能
+- 图谱、岗位卡片、任务/能力/知识技能读取和关系查询；
+- 事理森林：工作场景、阶段、条件分支、返工环、交付物和任务桥接；
+- 岗位项目新建、冷启动、继续研究、风险修复和版本化快照；
+- 项目/会话/消息/BuildRun/BuildEvent 的持久化和恢复；
+- Static Role Package 编译、校验、发布、导出、版本 Tag 和恢复；
+- 工作区接入、证据归一化和岗位快照实例化；
+- 桌面本地项目永久删除并级联清理；浏览器端仍保留软删除/恢复语义；
+- 冷启动后台执行、构建事件回放以及断线后前端恢复。
 
-| 功能 | 当前状态 |
+### 4.4 Graph Hub 分类和检索推荐
+
+插件工具 `search_graph_hub` 返回专用 `graph_hub_recommendation` Renderer。当前前端支持：
+
+- 图谱类型筛选；
+- 名称和节点文本筛选；
+- 展开命中节点；
+- 显示当前主体可见范围；
+- 从推荐结果跳转 Graph Hub 或 Role Atlas。
+
+推荐结果是候选，不会自动写入学习路径、`EvidenceEvent` 或五核。
+
+## 5. 学习路径与学习星图
+
+### 5.1 数据结构
+
+学习节点已支持：
+
+- `sourceKind`：官方、对话、工具、岗位图谱包、手动等来源；
+- `sourceLabel`：面向用户的来源说明；
+- `semantics`：官方语义、个人语义和图谱特殊语义；
+- 官方节点必须带稳定简介和官方语义；旧节点读取时会自动补默认简介/个人语义；
+- 正式 overlay 与 reducer 同时兼容 camelCase 和 snake_case，便于旧数据迁移。
+
+相关实现主要在 `frontend/src/learning-path-graph.ts`、`frontend/src/official-learning-path-content.ts`、`backend/app/services/architecture_registry.py` 和学习路径 API。
+
+### 5.2 当前交互
+
+- 鼠标滚轮控制星图缩放，缩放中心尽量保持在光标位置；
+- 星图任意位置均可按住拖动，包括节点、星团和空白区域；
+- 通过 pointer capture 和 4px 移动阈值区分点击与拖动，拖动后不会误触发节点点击；
+- 星图区域使用 `preventDefault` 与 `overscroll-behavior: contain`，拖动时不会带动外层学习路径页面上下滚动；
+- 节点/星团原有点击、状态变更和选中逻辑仍保留；
+- 雷达/星图的缩放和拖动不直接改变学习状态，状态变更仍由明确操作写入。
+
+## 6. 桌面端与桌宠
+
+### 6.1 桌面壳
+
+- Tauri 主窗口 label 为 `main`，桌宠窗口 label 为 `pet`；
+- sidecar 使用随机 loopback 端口和独立应用数据目录；
+- 支持托盘、单实例唤醒、桌宠显示/隐藏、窗口位置持久化和全局快捷键；
+- 主窗口和桌宠复用正式 Tutor Session、Task、Review、File 等对象，不共享第二套数据库权威。
+
+### 6.2 capability 和临时上下文
+
+桌宠使用短效 `lfpet_` capability，不把主窗口 bearer 暴露给 pet。capability 绑定账户、learner、父 AuthSession 和 `auth_epoch`，服务端只保留 token hash，并按 URL→scope 白名单限制访问。
+
+当前支持的临时上下文：`text`、`ocr_text`、`image_observation`、`document_excerpt`、`video_transcript`。默认 TTL 15 分钟、正文上限 12,000 字，需用户确认后最多携带 3 条引用进入一个受限 Tutor 回合；消费或过期后清除正文，仅保留有限 provenance receipt。
+
+选区快捷键默认 `Ctrl+Alt+P`：优先在原前台窗口通过 Unicode 复制读取选区，失败后才回退截图/视觉模型；读取结束会恢复用户原剪贴板。跨 Edge、PDF 阅读器等真实 GUI 场景仍需要手工验收。
+
+## 7. 已完成修复矩阵
+
+| 原问题 | 当前状态 |
 | --- | --- |
-| 独立桌宠窗口 | 已交付：透明、置顶、无边框、紧凑头像/对话两种形态 |
-| 桌宠形象 | 已交付：设置中可选 `mist`、`warm`、`dusk` |
-| 托盘与单实例 | 已交付：显示/隐藏桌宠、打开主窗口、退出、第二实例唤醒首实例 |
-| 主窗/桌宠同步 | 已交付：正式 Tutor Session 同步，主窗导航使用 request/ack |
-| 桌宠任务与复习 | 已交付：读取任务/复习摘要、开始/暂停/恢复既有任务或 SkillRun、复习提醒通知 |
-| 文本上下文 | 已交付：用户输入后预览、确认、单回合消费 |
-| 图片观察 | 已交付：粘贴或选择图片，规范化后调用账户视觉模型并生成 TTL 观察 |
-| 文档摘录 | 已交付：支持文本、Markdown、CSV、PDF、DOCX、PPTX、XLSX，最多 12 MB |
-| 字幕导入 | 已交付基础 SRT/VTT/TXT 文本提取；完整 `source_ref` 时间轴链路仍待补齐 |
-| 选中文本 | 已交付：优先读取系统原生 Unicode 选区，失败时回退视觉转录 |
-| 鼠标穿透 | 已交付：本机设置持久化，并可从托盘恢复交互 |
-| OS 贴边 dock/动画 | 未完成：`edgeAutoHide` 目前只持久化，不代表系统级贴边行为 |
+| 图谱仓库检索异常 | 已补 Graph Hub 检索、分类、推荐 Renderer 和可见范围过滤 |
+| 图谱分类/推荐缺失 | 已完成，工具为 `search_graph_hub` |
+| 进入 Role Atlas 跳转失败 | 已修复桌面外链命令和 HTTP(S) 校验 |
+| Role Atlas 无删除岗位项目选项 | 桌面本地请求改为永久删除并级联清理；浏览器仍可软删除/恢复 |
+| Role Atlas 冷启动不可用 | 已加入后台 `waitUntil`、BuildEvent 回放和断线恢复；真实供应商/桌面 GUI 仍需验收 |
+| 动画/图片生成卡死且上下文丢失 | 已补图解意图识别、恢复已验证上文主题；视觉规划失败保留正式 Tutor 讲解并展示失败 ToolRun |
+| 学习路径节点缺少来源/简介/语义 | 已加入官方/个人来源、简介和多来源语义，保持旧数据兼容 |
+| 岗位雷达杂乱、拖入对话困难 | 已支持选中节点放大、关联节点/边高亮、无关内容淡化；对话栏整区可接收拖入 |
+| 学习星图只能空白处拖动、页面跟着滚动 | 已支持任意位置拖动、点击兼容和星图区域滚动锁定 |
 
-## 6. 视觉模型配置
+## 8. 本地运行
 
-设置页展示的名称固定为“配置视觉模型”。主路径如下：
-
-1. 账户在设置页填写视觉 API Key、Base URL 和模型名称；
-2. API Key 以账户级加密信封保存，视觉用途使用独立 AAD；界面只返回脱敏 hint；
-3. 桌宠通过 `/api/auth/vision-credential` 和 `account_vision_provider_config()` 取得当前账户范围的 provider 配置；
-4. 没有独立视觉 Key 时，可以显式复用同一账户的 Tutor Key，Base URL/模型也按账户配置回退；
-5. 桌宠 capability 不携带任何明文模型凭据，图片原始字节只在请求内存中处理。
-
-相关接口：
-
-- `GET /api/auth/vision-credential`：读取配置元数据；
-- `PUT /api/auth/vision-credential`：保存或更新配置；
-- `DELETE /api/auth/vision-credential`：清除独立视觉配置并回到未配置状态；
-- `POST /api/auth/vision-credential/test`：发送最小有效测试图片验证连接。
-
-视觉图片观察要求模型返回受约束的 JSON；格式或 provider 错误会转换为前端可读的中文错误。视觉观察是“不可信外部参考”，不改变评分、教学策略、掌握状态或五核。
-
-## 7. 选中文字识别工作流
-
-默认快捷键为 `Ctrl+Alt+P`，可在桌宠设置中切换为 `Ctrl+Shift+P` 或 `Alt+Shift+P`。
-
-1. 桌宠隐藏时按快捷键：主窗口收到请求并打开桌宠；
-2. 桌宠可见时按快捷键：Tauri 记录触发瞬间的外部前台窗口句柄；
-3. 在隐藏的 PowerShell STA 进程中将焦点短暂交给目标窗口，最多三次发送 `Ctrl+C`；
-4. 通过剪贴板序列号和文本变化判断是否拿到新选区，并在结束时无条件恢复用户原剪贴板；
-5. 原生文本成功时直接返回可编辑文字，桌宠自动展开并提示“已从当前窗口直接读取”；
-6. 原生读取不到（例如不可复制、受保护或不响应快捷键）时，回退为目标窗口截图，再调用账户视觉模型 `/api/pet/selection-text`；
-7. 识别结果进入 `ocr_text` 临时上下文，仍需用户发送/确认后才随一个 Tutor 回合消费。
-
-UI 已移除手动“截图文字 OCR”文件选择入口，用户只需在原应用选中文字后按快捷键。视觉回退仍受 12 MB 图片和 12,000 字上下文上限约束，长段落或特殊渲染文本的跨应用 GUI 回归尚未完成。
-
-## 8. 关键代码入口
-
-| 层 | 文件 | 作用 |
-| --- | --- | --- |
-| 后端模型 | `backend/app/models/learning.py` | `DesktopPetCapability`、`DesktopPetContextPackage` 及账户视觉字段 |
-| 后端认证 | `backend/app/services/auth.py` | capability 签发、scope 白名单、账户视觉凭据加解密 |
-| 后端 API | `backend/app/api/pet.py` | bootstrap、上下文包、文档、图片、选区转录 |
-| 后端上下文 | `backend/app/services/desktop_pet_context.py` | TTL、确认、scope/session 校验、消费和幂等 |
-| 后端视觉 | `backend/app/services/desktop_pet_vision.py` | 图片规范化、视觉观察、选区视觉回退 |
-| Tutor 受限回合 | `backend/app/api/agent.py`、`backend/app/services/tutor_service.py` | `context_refs`、信任边界、单回合消费 |
-| 前端运行时 | `frontend/src/runtime-client.ts`、`frontend/src/formal-runtime.ts` | 桌面 sidecar 地址、token/capability 注入、pet API 封装 |
-| 前端入口 | `frontend/src/main.tsx` | 创建 pet 窗口、事件桥、主窗/桌宠挂载分流 |
-| 桌宠 UI | `frontend/src/DesktopPet.tsx`、`frontend/src/PetAvatar.tsx` | 对话、任务、复习、上下文、快捷键结果展示 |
-| Tauri 壳 | `desktop/src-tauri/src/lib.rs` | sidecar、托盘、单实例、快捷键、窗口生命周期、原生选区读取 |
-| Tauri 权限 | `desktop/src-tauri/capabilities/default.json` | `main`/`pet` 窗口权限与本地 HTTP 访问 |
-| sidecar 构建 | `desktop/scripts/build_sidecar.py` | PyInstaller 打包并复制目标三元组命名的 sidecar |
-
-## 9. 本地启动与打包
-
-### 9.1 浏览器开发模式
+### 8.1 浏览器开发模式
 
 ```bash
 bash start.sh
@@ -203,9 +181,9 @@ bash start.sh status
 bash start.sh stop
 ```
 
-默认前端为 `http://localhost:4174`，后端为 `http://127.0.0.1:8010`。首次启动会检查 Python 3.10–3.13、后端依赖、`frontend/node_modules` 和 `backend/.env`。不要把真实 `.env`、数据库或日志提交到 Git。
+默认前端为 `http://localhost:4174`，后端为 `http://127.0.0.1:8010`。脚本会检查 Python 3.10–3.13、后端依赖、`frontend/node_modules` 和 `backend/.env`。
 
-### 9.2 桌面开发与构建
+### 8.2 桌面开发和构建
 
 ```bash
 cd frontend
@@ -220,58 +198,72 @@ npm run dev
 npm run build
 ```
 
-桌面构建前需要：
-
-- Rust stable 与 Tauri 2 平台依赖；
-- `backend` 运行依赖；
-- `desktop/requirements-build.txt` 中的 PyInstaller 依赖；
-- Node.js 与前端/桌面 `node_modules`。
-
-Windows 调试检查在没有默认 rustup toolchain 时使用：
+需要 Rust stable、Tauri 2 平台依赖、Node.js、后端运行依赖和 `desktop/requirements-build.txt` 中的 PyInstaller 依赖。若 rustup 没有默认 toolchain，可使用：
 
 ```bash
 rustup run stable cargo check --no-default-features
 ```
 
-sidecar 制品写入 `desktop/src-tauri/binaries/`，通常被 Git 忽略；Tauri 安装包位于 `desktop/src-tauri/target/release/bundle/` 下。安装包签名、证书和商店凭据不在仓库内管理。
+Role Atlas 独立开发/验证：
 
-## 10. 验证记录
+```bash
+cd apps/role-atlas
+npm install
+npm run typecheck
+npm test
+npm run build
+npm run dev
+```
 
-本次交接前已实际执行：
+Role Atlas 要求 Node.js `>=22.13.0`；真实模型和联网冷启动需要相应的 `.env.local` 配置，密钥不得提交。
+
+## 9. 验证证据
+
+已实际执行或在当前提交前后确认的结果：
 
 | 检查 | 结果 |
 | --- | --- |
-| `frontend/npm run build` | 通过；TypeScript 与 Vite 构建成功，只有既有大 chunk 提示 |
-| `frontend/npm run test:auth` | 通过，15 项 |
-| `backend` 的 `test_architecture_registry.py` + `test_desktop_pet_vision.py` | 通过，25 项 |
-| `rustup run stable cargo check --no-default-features` | 通过 |
+| 后端定向契约套件：`tests/test_workspace.py`、`tests/test_tutor.py`、`tests/test_local_agent_broker.py`、`tests/test_architecture_registry.py` | `111 passed` |
+| 前端全量测试与构建 | 已通过；历史路径测试曾有一个 Role Atlas 导出换行失败，需在继续改动时重新核对 |
+| Role Atlas 测试、类型检查、直接 `npx vinext build` | 已通过（迁移后 140+ 测试，具体数量随提交变化） |
+| `git diff --check` | 已通过 |
+| Rust：`rustup run stable cargo check --no-default-features` | 已通过 |
+| PR #8 `verify` | GitHub 已成功 |
+| PR #8 Windows/macOS internal package | 本文生成时仍在运行，不能提前视为通过 |
 
-仍未完成或未在本机执行：
+未完成或需要真实环境补验：
 
-- Edge、PDF 阅读器等跨应用真实 GUI 选区回归；
-- Tauri 安装包的完整安装、升级、托盘和单实例验收；
-- 字幕 `source_ref` 与时间窗的完整服务端/前端链路；
+- Tauri 安装包完整安装、升级、托盘、单实例和桌面外链验收；
+- Edge、PDF 阅读器等跨应用选区读取与剪贴板恢复；
+- Role Atlas 真实供应商联网冷启动、长任务恢复和桌面 GUI；
+- 字幕 `source_ref` 时间窗的完整前后端链路；
 - OS 级贴边 dock、自动隐藏和动画；
-- Windows/macOS 安装包签名与发布流水线。
+- Windows/macOS 安装包签名与发布流水线；
+- 完整后端套件中曾出现的 Windows 权限、编码和 symlink 环境问题。
 
-完整后端套件此前出现 9 项 Windows 权限、编码或符号链接环境失败，涉及 `code_executor`、`local_agent_broker`、`source_boundaries`、`workspace`、`user_isolation` 等非桌宠区域；不能把这些失败归因于桌宠改动，CI 或启用 Developer Mode 后应重新核验。
+## 10. Git、PR 与接手顺序
 
-## 11. 建议接手顺序
+当前分支已经把 `origin/main`（`0d2e706`）作为合并提交的第二父提交纳入，PR #8 为：
 
-1. 阅读根目录 `AGENTS.md`、`docs/ARCHITECTURE_AUTHORITY.md`、`docs/AGENT_ARCHITECTURE_GUIDE.md`、`docs/DESKTOP_PET_MIGRATION.md` 和本文。
-2. 执行 `git status -sb`，逐个审阅当前六个未提交文件及本文；确认是否将 OCR 契约修复与文档分开提交。
-3. 在 `backend`、`frontend` 和 `desktop` 分别运行最小回归，再启动 sidecar 与桌面调试版。
-4. 使用测试账户登录，进入正式 Tutor Session，打开桌宠，配置“配置视觉模型”，验证纯文本、图片、文档、字幕和快捷键选区流程。
-5. 在 Edge/PDF 中验证长选区：先确认原应用允许复制，再按快捷键，检查原剪贴板是否恢复、结果是否完整、发送后上下文是否清除。
-6. 处理波次二事项：字幕 source_ref 共享常量、时间窗 receipt、OS dock/动画及真实 GUI e2e。
-7. 发布前比较 `origin/main` 的非桌宠新变化；不要把当前桌宠分支误认为已与最新 `main` 完整对齐。
+`https://github.com/killoppen/edagent/pull/8`
 
-## 12. 安全与架构红线
+截至本文生成时：PR open、`mergeable=true`、`verify` 已成功，Windows/macOS internal package 仍运行中。不要在内部打包检查完成前宣称 PR 全部通过；也不要把本地 `main` 分支当作最新基线，应以 `origin/main` 为准。
 
-- 不在文档、日志、提交或截图中保存 API Key、Token、Cookie、`.env` 值、数据库内容或模型凭据。
-- 不让桌宠直接写 `KernelState`、`Memory Graph`、`EvidenceEvent` 或长期用户画像。
-- 不新增第四类主 Agent，不建立第二套消息/学习状态权威。
-- 不绕过 capability scope、learner/session ownership、TTL、确认和幂等校验。
-- 不把视觉模型生成内容、一次答对、带提示成功或原题重做当作掌握证据。
-- 不使用 `git reset --hard`、`git checkout --`、rebase 或 force push 清理工作树。
-- 任何架构热点修改都要同步注册表、实现、测试和文档，并报告 `Contract impact`。
+推荐接手顺序：
+
+1. 先读根目录 `AGENTS.md`、`docs/ARCHITECTURE_AUTHORITY.md`、`docs/AGENT_ARCHITECTURE_GUIDE.md`、`docs/GITHUB_COLLABORATION.md` 和本文。
+2. 执行 `git status -sb`，保护 `desktop/src-tauri/Cargo.toml` 用户改动。
+3. 用 `git log --oneline --decorate -15` 确认当前提交，再检查 PR #8 的实时 CI。
+4. 先运行前端构建和后端定向契约测试；需要桌面验收时重新构建 sidecar 和 Tauri Release，避免运行旧的 `target/release/learnflow-desktop.exe`。
+5. 手工验证主窗口登录、学习路径星图拖动/缩放、Graph Hub 推荐、Role Atlas 外链、岗位删除/冷启动恢复、桌宠上下文和视频候选核验。
+6. 后续修改架构热点时同步更新注册表、实现、测试和文档，并在提交说明中写 `Contract impact`。
+
+## 11. 禁止操作与安全边界
+
+- 不提交 `.env`、API Key、Token、Cookie、真实数据库、`node_modules`、虚拟环境、模型权重、缓存或本地日志；
+- 不使用 `git reset --hard`、`git checkout --`、rebase 或 force push 清理工作树；
+- 不覆盖、删除或提交任务范围外的用户改动，尤其是 `desktop/src-tauri/Cargo.toml`；
+- 不让 Role Atlas、桌宠、插件或 LLM 直接写五核、掌握状态或长期记忆；
+- 不把视频搜索/播放、视觉生成、一次答对或带提示成功直接当作掌握证据；
+- 不把参考仓库当作持续上游，不自动 merge、cherry-pick 或同步其数据库/状态；
+- 删除项目、发布岗位包、确认学习计划和其他高影响操作必须保留明确的用户确认、scope ownership 和幂等边界。
