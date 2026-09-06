@@ -413,6 +413,25 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
     const runId = crypto.randomUUID();
     let activeProjectId = projectId;
     let activeConversationId = conversationId;
+    let kernelResult: ColdStartBuildResult | null = null;
+    let lastSeq = -1;
+    const consumeEvent = (event: BuildEvent) => {
+      lastSeq = Math.max(lastSeq, event.seq);
+      if (event.kind === "build.kernel.completed") kernelResult = event.payload.result as ColdStartBuildResult;
+      applyEvent(event);
+    };
+    const replayUntilKernel = async () => {
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        const replay = await fetch(`/api/build-runs/${encodeURIComponent(runId)}/events?projectId=${encodeURIComponent(activeProjectId)}&after=${lastSeq}`, { cache: "no-store" });
+        if (!replay.ok) return false;
+        const payload = await replay.json() as { events?: BuildEvent[]; done?: boolean };
+        for (const event of payload.events || []) consumeEvent(event);
+        if (kernelResult || payload.done) return Boolean(kernelResult);
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+      return Boolean(kernelResult);
+    };
     try {
       if (!activeProjectId) {
         activeProjectId = crypto.randomUUID();
@@ -475,7 +494,6 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let kernelResult: ColdStartBuildResult | null = null;
       while (true) {
         const { value, done } = await reader.read();
         buffer += decoder.decode(value, { stream: !done });
@@ -483,33 +501,36 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
         buffer = lines.pop() || "";
         lines.filter(Boolean).forEach((line) => {
           const event = JSON.parse(line) as BuildEvent;
-          if (event.kind === "build.kernel.completed") kernelResult = event.payload.result as ColdStartBuildResult;
-          applyEvent(event);
+          consumeEvent(event);
         });
         if (done) break;
       }
       if (buffer.trim()) {
         const event = JSON.parse(buffer) as BuildEvent;
-        if (event.kind === "build.kernel.completed") kernelResult = event.payload.result as ColdStartBuildResult;
-        applyEvent(event);
+        consumeEvent(event);
       }
-      if (kernelResult) {
-        sessionStorage.setItem(`role-atlas.pending-enrichment:${activeProjectId}`, JSON.stringify({
-          baseSnapshotId: (kernelResult as ColdStartBuildResult).snapshot.id,
-          enrichmentRunId: `${crypto.randomUUID()}:enrichment`,
-          roleTitle: roleTitle.trim(),
-          roleDescription: roleDescription.trim(),
-          market: market.trim() || "中国大陆",
-          conversationId: activeConversationId,
-          webResearch: webResearch && !options?.reuseProjectSources,
-        }));
-        window.location.assign(`/projects/${encodeURIComponent(activeProjectId)}?conversation=${encodeURIComponent(activeConversationId)}&enrich=1`);
-      }
+      if (!kernelResult && !controller.signal.aborted && !await replayUntilKernel()) setError("实时连接已结束，后台任务仍未完成，请稍后重试。");
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "冷启动请求失败。");
+      if (!controller.signal.aborted) {
+        const recovered = await replayUntilKernel().catch(() => false);
+        if (!recovered) setError(cause instanceof Error ? cause.message : "冷启动请求失败。");
+      }
     } finally {
       abortRef.current = null;
       setRunning(false);
+    }
+    const completedKernel = kernelResult as ColdStartBuildResult | null;
+    if (completedKernel) {
+      sessionStorage.setItem(`role-atlas.pending-enrichment:${activeProjectId}`, JSON.stringify({
+        baseSnapshotId: completedKernel.snapshot.id,
+        enrichmentRunId: `${crypto.randomUUID()}:enrichment`,
+        roleTitle: roleTitle.trim(),
+        roleDescription: roleDescription.trim(),
+        market: market.trim() || "中国大陆",
+        conversationId: activeConversationId,
+        webResearch: webResearch && !options?.reuseProjectSources,
+      }));
+      window.location.assign(`/projects/${encodeURIComponent(activeProjectId)}?conversation=${encodeURIComponent(activeConversationId)}&enrich=1`);
     }
   }
 
@@ -559,7 +580,7 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
           <label><span>资料标题</span><input value={sourceTitle} disabled={running} onChange={(event) => setSourceTitle(event.target.value)} placeholder="例如：企业岗位说明" /></label>
           <label><span>资料内容</span><textarea className="source-input" value={sourceContent} disabled={running} onChange={(event) => setSourceContent(event.target.value)} placeholder="粘贴岗位描述、流程材料或脱敏工作记录…" /></label>
           {error ? <div className="cold-error"><AlertTriangle size={13} />{error}{/模型/.test(error) ? embedded && onSettingsRequest ? <button type="button" onClick={onSettingsRequest}>去设置</button> : <Link href="/settings">去设置</Link> : null}</div> : null}
-          {running ? <button className="cold-start stop" onClick={() => abortRef.current?.abort()}><Square size={12} /> 停止本轮构建</button> : <button className="cold-start" disabled={roleTitle.trim().length < 2 || (!configuredRuntime.modelReady && !offlineMode)} onClick={() => void startBuild()}><Play size={13} /> {offlineMode ? "保存离线候选内核" : "生成岗位内核并进入工作台"}</button>}
+          {running ? <button className="cold-start stop" onClick={() => abortRef.current?.abort()}><Square size={12} /> 断开显示，后台继续构建</button> : <button className="cold-start" disabled={roleTitle.trim().length < 2 || (!configuredRuntime.modelReady && !offlineMode)} onClick={() => void startBuild()}><Play size={13} /> {offlineMode ? "保存离线候选内核" : "生成岗位内核并进入工作台"}</button>}
           {result && !running ? <button className="cold-start" onClick={() => void startBuild({ reuseProjectSources: true })}><Layers3 size={13} /> 复用已索引来源重跑抽取</button> : null}
           {result && projectId ? <Link className="cold-open-project" href={skillIntent === "snapshot-iteration" ? `/snapshots/${encodeURIComponent(result.snapshot.id)}/iterate?profile=co_guided&project=${encodeURIComponent(projectId)}&conversation=${encodeURIComponent(conversationId)}` : `/projects/${projectId}?conversation=${conversationId}`}>{skillIntent === "snapshot-iteration" ? "进入岗位快照迭代" : "打开项目工作台"} <ArrowLeft size={12} /></Link> : null}
         </section>

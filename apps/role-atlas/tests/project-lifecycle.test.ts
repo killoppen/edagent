@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { mayManageProject, projectLifecycleStatements } from "@/lib/projects/lifecycle";
+import { mayManageProject, projectLifecycleStatements, projectPurgeStatements } from "@/lib/projects/lifecycle";
 
 test("删除归属来自服务端身份；无主历史项目仅允许管理员", () => {
   assert.equal(mayManageProject("learner:1", { subjectId: "learner:1", role: "user" }), true);
@@ -49,4 +49,14 @@ test("软删除、停止运行与审计原子执行；恢复保留历史但不�
     assert.equal(db.prepare("SELECT status FROM role_jobs WHERE project_id='p1'").get()?.status, "cancelled");
     assert.equal(db.prepare("SELECT count(*) AS n FROM project_version_events").get()?.n, 2);
   } finally { db.close(); }
+});
+
+test("桌面端永久删除覆盖项目树，但不删除已发布岗位包", () => {
+  const statements: string[] = [];
+  const binding = { prepare: (sql: string) => ({ bind: (..._values: unknown[]) => { statements.push(sql); return {}; } }) } as unknown as D1Database;
+  projectPurgeStatements(binding, { projectId: "p1", actor: { subjectId: "role-atlas:local-preview", role: "admin" } });
+  assert.ok(statements.some((sql) => sql.startsWith("DELETE FROM projects")));
+  assert.ok(statements.some((sql) => sql.startsWith("DELETE FROM conversations")));
+  assert.ok(statements.some((sql) => sql.startsWith("DELETE FROM role_jobs")));
+  assert.equal(statements.some((sql) => sql.startsWith("DELETE FROM package_releases")), false);
 });

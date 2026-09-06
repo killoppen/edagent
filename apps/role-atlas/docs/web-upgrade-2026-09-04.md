@@ -22,7 +22,7 @@
 - `GET /api/hub/search?q=&category=&offset=&limit=`：`graph-hub.discovery.v1`。仅发现公开已发布的推荐版本；每个结果带 packageVersion、snapshotId、rootHash 和匹配原因，不导出私有草稿或来源正文。不可用返回 503，不能伪装成空结果。
 - Hub 页与 API 共用 `lib/hub/discovery.ts`。当前为请求时读取发布包，不是成熟的独立搜索索引；仓库增多后应增加按不可变版本构建的索引。
 - LearnFlow 公共发现不携带用户 Cookie，不自动安装；读取某版本图谱仍需经既有引用/导入链。个人 scoped catalog 的权限与哈希校验保持有效。
-- `DELETE /api/projects/:id` 仅软删除；`PATCH` 的 `action=restore` 恢复；`GET /api/projects/trash` 仅列出允许当前身份管理的项目。旧项目 owner 为空时仅管理员可以管理，不允许第一个访问者认领。
+- 浏览器请求的 `DELETE /api/projects/:id` 仍是可恢复软删除；桌面端本地请求带 `x-role-atlas-desktop: 1` 时执行永久删除并级联清理项目树。`PATCH` 的 `action=restore` 只适用于浏览器软删除；`GET /api/projects/trash` 仅列出允许当前身份管理的项目。旧项目 owner 为空时仅管理员可以管理，不允许第一个访问者认领。
 - 删除将运行记录标记取消，撤销任务租约并阻止版本提交；已发送的上游模型请求可能仍执行至返回，不能宣称立即终止计算。恢复不重启这些任务。
 - 删除项目不等于撤回公开发布。发布包、版本历史与学习引用保持不变。
 - 引用拖拽只添加草稿，不发送消息、不创建学习事件、不改变掌握状态。

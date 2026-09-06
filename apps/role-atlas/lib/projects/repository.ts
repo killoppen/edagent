@@ -229,6 +229,20 @@ export async function appendBuildEvent(event: BuildEvent) {
   }).onConflictDoNothing();
 }
 
+export async function listBuildEvents(projectId: string, runId: string, afterSeq = -1) {
+  await ensureAppSchema();
+  const rows = await getDb().select().from(buildEvents)
+    .where(and(eq(buildEvents.projectId, projectId), eq(buildEvents.runId, runId)))
+    .orderBy(asc(buildEvents.seq));
+  return rows
+    .filter((row) => row.seq > afterSeq)
+    .map((row) => {
+      try { return JSON.parse(row.eventJson) as BuildEvent; }
+      catch { return null; }
+    })
+    .filter((event): event is BuildEvent => Boolean(event));
+}
+
 export async function completeBuildRun(result: ColdStartBuildResult, conversationId?: string) {
   return commitProjectVersion({
     projectId: result.projectId,

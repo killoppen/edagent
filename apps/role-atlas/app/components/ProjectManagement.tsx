@@ -6,6 +6,7 @@ import { RotateCcw, Trash2 } from "lucide-react";
 type TrashedProject = { id: string; title: string; deletedAt: string };
 
 export default function ProjectManagement({ projectId, title }: { projectId?: string; title: string }) {
+  const desktop = typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -21,10 +22,13 @@ export default function ProjectManagement({ projectId, title }: { projectId?: st
     finally { setBusy(false); }
   };
   const change = async (id: string, action: "delete" | "restore") => {
-    if (action === "delete" && !window.confirm(`将“${title}”移入回收站？后台任务将标记取消并禁止提交新版本，已发出的模型请求可能稍后结束。项目可以恢复，已发布岗位包不会被删除。`)) return;
+    if (action === "delete" && !window.confirm(desktop
+      ? `永久删除“${title}”？所有会话、版本、运行记录和岗位项目数据都将不可恢复地删除，已发布岗位包不会被删除。`
+      : `将“${title}”移入回收站？后台任务将标记取消并禁止提交新版本，已发出的模型请求可能稍后结束。项目可以恢复，已发布岗位包不会被删除。`)) return;
     setBusy(true); setError("");
     try {
       const response = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: action === "delete" ? "DELETE" : "PATCH",
+        ...(desktop && action === "delete" ? { headers: { "x-role-atlas-desktop": "1" } } : {}),
         ...(action === "restore" ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) } : {}) });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error || "操作失败。");
@@ -34,11 +38,11 @@ export default function ProjectManagement({ projectId, title }: { projectId?: st
   };
   return <div className="project-management">
     <div className="project-actions">
-      {projectId && <button type="button" className="project-new-chat" disabled={busy} onClick={() => void change(projectId, "delete")}><Trash2 size={13} /> 删除当前项目</button>}
-      <button type="button" className="project-new-chat" disabled={busy} onClick={() => open ? setOpen(false) : void loadTrash()} aria-expanded={open}><RotateCcw size={13} /> 项目回收站</button>
+      {projectId && <button type="button" className="project-new-chat" disabled={busy} onClick={() => void change(projectId, "delete")}><Trash2 size={13} /> {desktop ? "永久删除当前项目" : "删除当前项目"}</button>}
+      {!desktop && <button type="button" className="project-new-chat" disabled={busy} onClick={() => open ? setOpen(false) : void loadTrash()} aria-expanded={open}><RotateCcw size={13} /> 项目回收站</button>}
     </div>
     {error && <p role="alert" className="project-empty">{error}</p>}
-    {open && <section aria-label="项目回收站">
+    {open && !desktop && <section aria-label="项目回收站">
       {busy && <p role="status">正在读取…</p>}
       {!busy && !error && !deleted.length && <p className="project-empty">没有可恢复的项目。</p>}
       {deleted.map(project => <div className="project-row" key={project.id}><span><b>{project.title}</b><small>{new Date(project.deletedAt).toLocaleDateString()}</small></span><button type="button" disabled={busy} onClick={() => void change(project.id, "restore")} aria-label={`恢复${project.title}`}>恢复</button></div>)}

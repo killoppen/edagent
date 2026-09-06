@@ -33,3 +33,31 @@ export function projectLifecycleStatements(d1: D1Database, input: { projectId: s
   }
   return statements;
 }
+
+export function projectPurgeStatements(d1: D1Database, input: { projectId: string; actor: ProjectActor }) {
+  const { projectId, actor } = input;
+  const guard = "WHERE project_id=? AND EXISTS (SELECT 1 FROM projects WHERE id=? AND (owner_subject_id=? OR ?='admin'))";
+  const statements = [
+    d1.prepare(`DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE project_id=? )`).bind(projectId),
+    d1.prepare(`DELETE FROM build_events ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM risk_events ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM risk_issues ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM risk_patches ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM snapshot_risk_events WHERE run_id IN (SELECT id FROM snapshot_risk_runs WHERE project_id=? )`).bind(projectId),
+    d1.prepare(`DELETE FROM snapshot_iteration_events WHERE run_id IN (SELECT id FROM snapshot_iteration_runs WHERE project_id=? )`).bind(projectId),
+    d1.prepare(`DELETE FROM workspace_ingestion_events WHERE run_id IN (SELECT id FROM workspace_ingestion_runs WHERE project_id=? )`).bind(projectId),
+    d1.prepare(`DELETE FROM project_tags ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM semantic_diffs ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM project_version_events ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM role_jobs ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM risk_runs ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM snapshot_risk_runs WHERE project_id=?`).bind(projectId),
+    d1.prepare(`DELETE FROM snapshot_iteration_runs WHERE project_id=?`).bind(projectId),
+    d1.prepare(`DELETE FROM workspace_ingestion_runs WHERE project_id=?`).bind(projectId),
+    d1.prepare(`DELETE FROM project_versions ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM build_runs ${guard}`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM conversations WHERE project_id=? AND EXISTS (SELECT 1 FROM projects WHERE id=? AND (owner_subject_id=? OR ?='admin'))`).bind(projectId, projectId, actor.subjectId, actor.role),
+    d1.prepare(`DELETE FROM projects WHERE id=? AND (owner_subject_id=? OR ?='admin')`).bind(projectId, actor.subjectId, actor.role),
+  ];
+  return statements;
+}

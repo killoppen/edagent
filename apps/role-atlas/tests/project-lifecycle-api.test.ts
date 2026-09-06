@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isLocalPreviewRequest, localPreviewActor } from "@/lib/projects/local-preview";
+import { isDesktopRequest, isLocalPreviewRequest, localPreviewActor } from "@/lib/projects/local-preview";
 
 const environment = process.env as Record<string, string | undefined>;
 
@@ -38,4 +38,9 @@ test("生产环境不会启用本地项目管理主体", async () => {
     if (previousBaseUrl === undefined) delete environment.LEARNFLOW_BASE_URL; else environment.LEARNFLOW_BASE_URL = previousBaseUrl;
     if (previousLocalManagement === undefined) delete environment.ROLE_ATLAS_LOCAL_MANAGEMENT; else environment.ROLE_ATLAS_LOCAL_MANAGEMENT = previousLocalManagement;
   }
+});
+
+test("桌面管理请求需要显式桌面标记", () => {
+  assert.equal(isDesktopRequest(new Request("http://127.0.0.1:3000")), false);
+  assert.equal(isDesktopRequest(new Request("http://127.0.0.1:3000", { headers: { "x-role-atlas-desktop": "1" } })), true);
 });

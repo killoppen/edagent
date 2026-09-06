@@ -8,6 +8,10 @@ export function isLocalPreviewRequest(request: Request) {
   return LOCAL_HOSTS.has(new URL(request.url).hostname);
 }
 
+export function isDesktopRequest(request: Request) {
+  return request.headers.get("x-role-atlas-desktop") === "1";
+}
+
 export function localPreviewActor(request: Request): ProjectActor | null {
   return isLocalPreviewRequest(request) ? { subjectId: "role-atlas:local-preview", role: "admin" } : null;
 }

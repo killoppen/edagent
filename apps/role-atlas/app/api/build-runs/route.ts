@@ -9,6 +9,7 @@ import { appendBuildEvent, completeBuildStageRun, completeFastBuildSnapshot, fai
 import { createDurableJobStream, durableJobResponse } from "@/lib/jobs/runtime";
 import { startRoleJobHeartbeat } from "@/lib/jobs/runtime";
 import { checkpointRoleJob, claimRoleJob, completeRoleJob, failRoleJob, renewRoleJobLease } from "@/lib/jobs/repository";
+import { getRequestExecutionContext } from "vinext/shims/request-context";
 
 export const runtime = "edge";
 
@@ -170,7 +171,6 @@ export async function POST(request: Request) {
       {
         configurable: { thread_id: `${buildRequest.projectId}:${buildRequest.runId}` },
         streamMode: "custom",
-        signal: request.signal,
       },
     ),
     persist: async (event) => {
@@ -206,6 +206,7 @@ export async function POST(request: Request) {
       await failRoleJob({ jobId: buildRequest.runId, owner: jobOwner, error: String(event.payload.message || "冷启动失败"), retryable: event.payload.retryable !== false }).catch(() => undefined);
     },
     onFinally: stopHeartbeat,
+    keepAlive: (execution) => getRequestExecutionContext()?.waitUntil(execution),
   });
   return durableJobResponse(stream);
 }
