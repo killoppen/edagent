@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { createModelInvoker } from "@/lib/agent/model";
+import { createModelInvoker, createOfflineModelInvoker } from "@/lib/agent/model";
 import { createColdStartSkill } from "@/lib/build/graph";
 import type { BuildEvent } from "@/lib/build/events";
 import { coldStartRequestSchema, type ColdStartBuildResult } from "@/lib/build/types";
@@ -31,6 +31,7 @@ const requestSchema = z.object({
   searchConfig: z.unknown().optional(),
   webResearch: z.boolean().default(false),
   reuseProjectSources: z.boolean().default(false),
+  offline: z.boolean().default(false),
 });
 
 function failureEvent(input: { runId?: string; projectId?: string }, error: unknown): BuildEvent {
@@ -113,8 +114,8 @@ export async function POST(request: Request) {
   let searchConfig;
   try {
     const bindings = workerRuntimeBindings();
-    providerConfig = resolveProviderConfig(parsed.providerConfig, bindings);
-    searchConfig = parsed.reuseProjectSources || !parsed.webResearch
+    if (!parsed.offline) providerConfig = resolveProviderConfig(parsed.providerConfig, bindings);
+    searchConfig = parsed.offline || parsed.reuseProjectSources || !parsed.webResearch
       ? undefined
       : resolveSearchProviderConfig(parsed.searchConfig, bindings);
   } catch (error) {
@@ -154,8 +155,9 @@ export async function POST(request: Request) {
   const stopHeartbeat = startRoleJobHeartbeat({ renew: () => renewRoleJobLease(buildRequest.runId, jobOwner) });
 
   pruneWorkItemCache();
-  const graph = createColdStartSkill(createModelInvoker(providerConfig), {
+  const graph = createColdStartSkill(parsed.offline ? createOfflineModelInvoker() : createModelInvoker(providerConfig!), {
     searchConfig,
+    offline: parsed.offline,
     sourceLimit: 16,
     existingResearchReport,
     cache: coldStartWorkItemCache,

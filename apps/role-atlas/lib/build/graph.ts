@@ -101,6 +101,7 @@ const BuildState = new StateSchema({
 
 type SkillOptions = {
   searchConfig?: SearchProviderConfig;
+  offline?: boolean;
   sourceLimit?: number;
   existingResearchReport?: WebResearchReport;
   emitEvents?: boolean;
@@ -488,7 +489,7 @@ export function createColdStartSkill(model: ModelInvoker, options?: SkillOptions
   const researchSources = async (state: typeof BuildState.State, config: { signal?: AbortSignal }) => {
     const runStartedAt = Date.now();
     emit(state.request, "build.run.started", "system", { roleTitle: state.request.roleTitle, workflowVersion: COLD_START_WORKFLOW_VERSION });
-    if (!options?.searchConfig) return { activeRequest: state.request, researchReport: options?.existingResearchReport, runStartedAt };
+    if (options?.offline || !options?.searchConfig) return { activeRequest: state.request, researchReport: options?.existingResearchReport, runStartedAt };
     const searchPlan = await createRoleSearchPlan({ request: state.request, model, signal: config.signal, onReasoning: (delta) => emit(state.request, "build.reasoning.delta", "evidence", { lane: "search-planning", delta }) });
     const researched = await researchRoleSources({
       request: state.request,
@@ -531,6 +532,10 @@ export function createColdStartSkill(model: ModelInvoker, options?: SkillOptions
   const extractMentions = async (state: typeof BuildState.State, config: { signal?: AbortSignal }) => {
     const workItems = [...state.workItems];
     emit(state.request, "build.lane.started", "evidence", { lane: "mention-extraction", shardCount: state.shards.length, concurrency: 4 });
+    if (options?.offline) {
+      emit(state.request, "build.lane.completed", "evidence", { lane: "mention-extraction", mentionCount: 0, propositionCount: 0, failedShardCount: 0, mode: "offline" });
+      return { mentions: [], relationPropositions: [], workItems, laneFailures: ["离线候选模式未执行模型抽取；请配置模型后重跑以补全任务和证据。"] };
+    }
     const extracted = await extractShards({ request: state.request, prepared: state.prepared!, shards: state.shards, workItems, signal: config.signal });
     emit(state.request, "build.lane.completed", "evidence", { lane: "mention-extraction", mentionCount: extracted.mentions.length, propositionCount: extracted.propositions.length, failedShardCount: extracted.failures.length });
     return { mentions: extracted.mentions, relationPropositions: extracted.propositions, workItems, laneFailures: extracted.failures };
@@ -668,9 +673,9 @@ export function createColdStartSkill(model: ModelInvoker, options?: SkillOptions
       stage: "kernel",
       enrichment: {
         baseSnapshotId: kernelResult.snapshot.id,
-        status: "queued",
+        status: options?.offline ? "degraded" : "queued",
         completedLanes: [],
-        pendingLanes: ["capability", "knowledge", "skill_dependencies", "process", "inspection"],
+        pendingLanes: options?.offline ? [] : ["capability", "knowledge", "skill_dependencies", "process", "inspection"],
         updatedAt: new Date().toISOString(),
       },
     };
@@ -679,7 +684,7 @@ export function createColdStartSkill(model: ModelInvoker, options?: SkillOptions
     emit(state.request, "build.lane.completed", "semantic", { lane: "kernel", visibleTaskCount: visibleTasks.length, visibleNodeCount, durationMs: firstKernelMs });
     emit(state.request, "build.fast_snapshot.completed", "structural", { result: kernelResult, metrics, parentRunId: state.request.runId, compatibilityAlias: true });
     emit(state.request, "build.kernel.completed", "structural", { result: kernelResult, metrics, visibleTaskCount: visibleTasks.length, visibleNodeCount, backgroundLanes: ["capability", "knowledge", "skill_dependencies", "process", "inspection"] });
-    emit(state.request, "build.enrichment.queued", "system", { baseSnapshotId: kernelResult.snapshot.id, lanes: ["capability", "knowledge", "skill_dependencies", "process", "inspection"] });
+    if (!options?.offline) emit(state.request, "build.enrichment.queued", "system", { baseSnapshotId: kernelResult.snapshot.id, lanes: ["capability", "knowledge", "skill_dependencies", "process", "inspection"] });
     return {
       kernelResult,
       result: kernelResult,

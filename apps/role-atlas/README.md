@@ -37,6 +37,8 @@ Role Atlas 把静态、版本化的 **Role Package** 作为唯一事实源。一
 
 同一设置页可以配置 Tavily、Exa 或博查 API Key。未设置会话级覆盖时，冷启动会使用 `.env.local` 中配置的服务端搜索厂商；项目只保存来源与厂商请求索引，不保存密钥。Tavily 的能力选择和成本边界见 [Tavily 联网证据获取策略](docs/tavily-retrieval-strategy.md)。
 
+如果暂时没有模型 Key，新建岗位页会提供“离线候选模式”。它只保存岗位边界和证据缺口，不伪造任务、能力或发布状态；配置模型后可回到项目重跑补全。
+
 ## 主 Agent 工具
 
 主 Agent 对官方岗位包和项目岗位包使用同一个 `SnapshotRoleRuntime`。正常对话只会规划以下六个工具；`POST /api/role-tools` 仍保留完整低层工具面用于调试和兼容。

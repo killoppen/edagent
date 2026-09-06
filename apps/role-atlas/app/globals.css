@@ -539,6 +539,10 @@ button { color: inherit; }
 .cold-web-toggle > span { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 2px 6px; }
 .cold-web-toggle > span small { grid-column: 1 / -1; color: #8f9b94; }
 .cold-web-toggle input { width: 15px; height: 15px; accent-color: #7fa08a; }
+.cold-offline-toggle { display: flex !important; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; color: #f0e2d8; background: #30251f; border: 1px solid #765143; border-radius: 8px; }
+.cold-offline-toggle > span { display: grid; gap: 3px; }
+.cold-offline-toggle > span small { color: #c7a99a; }
+.cold-offline-toggle input { width: 15px; height: 15px; accent-color: #c98262; }
 .cold-error { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; margin: 10px 0; padding: 9px; color: #f0b39d; background: #412b24; border-radius: 7px; font-size: 8px; line-height: 1.45; }
 .cold-error a, .cold-error button { padding: 0; color: #fff; white-space: nowrap; background: transparent; border: 0; cursor: pointer; }
 .cold-start { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 39px; margin-top: 14px; color: #1d2a24; background: #f1eee3; border: 0; border-radius: 8px; font-size: 9px; font-weight: 900; cursor: pointer; }

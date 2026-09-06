@@ -185,6 +185,7 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
   const [sourceKind, setSourceKind] = useState<"public_document" | "private_document" | "workspace_observation">("public_document");
   const [sourceContent, setSourceContent] = useState("");
   const [webResearch, setWebResearch] = useState(true);
+  const [offlineMode, setOfflineMode] = useState(false);
   const [view, setView] = useState<View>("semantic");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
@@ -218,13 +219,20 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
     const controller = new AbortController();
     fetch("/api/runtime-config", { signal: controller.signal })
       .then((response) => response.json() as Promise<RuntimeConfigStatus>)
-      .then((status) => setConfiguredRuntime({
-        model: sessionModel || (status.model.configured ? `${PROVIDERS[status.model.provider].name} · 开发环境` : "未配置"),
-        modelReady: Boolean(sessionModel || status.model.configured),
-        search: sessionSearch || (status.search.configured ? `${SEARCH_PROVIDERS[status.search.provider].name} · 开发环境` : "未配置"),
-        searchReady: Boolean(sessionSearch || status.search.configured),
-      }))
-      .catch(() => setConfiguredRuntime({ model: sessionModel || "状态读取失败", modelReady: Boolean(sessionModel), search: sessionSearch || "状态读取失败", searchReady: Boolean(sessionSearch) }));
+      .then((status) => {
+        const searchReady = Boolean(sessionSearch || status.search.configured);
+        if (!searchReady) setWebResearch(false);
+        setConfiguredRuntime({
+          model: sessionModel || (status.model.configured ? `${PROVIDERS[status.model.provider].name} · 开发环境` : "未配置"),
+          modelReady: Boolean(sessionModel || status.model.configured),
+          search: sessionSearch || (status.search.configured ? `${SEARCH_PROVIDERS[status.search.provider].name} · 开发环境` : "未配置"),
+          searchReady,
+        });
+      })
+      .catch(() => {
+        if (!sessionSearch) setWebResearch(false);
+        setConfiguredRuntime({ model: sessionModel || "状态读取失败", modelReady: Boolean(sessionModel), search: sessionSearch || "状态读取失败", searchReady: Boolean(sessionSearch) });
+      });
     return () => controller.abort();
   }, []);
 
@@ -371,7 +379,7 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
     }
   }
 
-  async function startBuild(options?: { reuseProjectSources?: boolean }) {
+  async function startBuild(options?: { reuseProjectSources?: boolean; offline?: boolean }) {
     if (running || roleTitle.trim().length < 2) return;
     const rawProvider = sessionStorage.getItem(PROVIDER_SESSION_KEY);
     let providerConfig: ProviderConfig | undefined;
@@ -460,6 +468,7 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
           searchConfig,
           webResearch: webResearch && !options?.reuseProjectSources,
           reuseProjectSources: Boolean(options?.reuseProjectSources),
+          offline: Boolean(options?.offline || offlineMode),
         }),
       });
       if (!response.ok || !response.body) throw new Error((await response.json().catch(() => ({})) as { error?: string }).error || `请求失败（${response.status}）`);
@@ -545,11 +554,12 @@ export default function ColdStartWorkspace({ initialQuery, embedded = false, onC
             <span className={!webResearch || configuredRuntime.searchReady ? "ready" : "missing"}><b>联网搜索</b><small>{webResearch ? configuredRuntime.search : "本轮关闭"}</small></span>
             {(!configuredRuntime.modelReady || (webResearch && !configuredRuntime.searchReady)) ? embedded && onSettingsRequest ? <button type="button" onClick={onSettingsRequest}>去配置</button> : <Link href="/settings">去配置</Link> : null}
           </div>
+          {!configuredRuntime.modelReady ? <label className="cold-offline-toggle"><span><b>离线候选模式</b><small>不调用模型，仅保存岗位边界候选；后续可配置模型再补全。</small></span><input type="checkbox" checked={offlineMode} onChange={(event) => setOfflineMode(event.target.checked)} disabled={running} /></label> : null}
           <label><span>资料类型</span><select value={sourceKind} disabled={running} onChange={(event) => setSourceKind(event.target.value as typeof sourceKind)}><option value="public_document">公开资料 / JD / 标准</option><option value="private_document">私域岗位资料</option><option value="workspace_observation">真实工作事件观察</option></select></label>
           <label><span>资料标题</span><input value={sourceTitle} disabled={running} onChange={(event) => setSourceTitle(event.target.value)} placeholder="例如：企业岗位说明" /></label>
           <label><span>资料内容</span><textarea className="source-input" value={sourceContent} disabled={running} onChange={(event) => setSourceContent(event.target.value)} placeholder="粘贴岗位描述、流程材料或脱敏工作记录…" /></label>
           {error ? <div className="cold-error"><AlertTriangle size={13} />{error}{/模型/.test(error) ? embedded && onSettingsRequest ? <button type="button" onClick={onSettingsRequest}>去设置</button> : <Link href="/settings">去设置</Link> : null}</div> : null}
-          {running ? <button className="cold-start stop" onClick={() => abortRef.current?.abort()}><Square size={12} /> 停止本轮构建</button> : <button className="cold-start" disabled={roleTitle.trim().length < 2} onClick={() => void startBuild()}><Play size={13} /> 生成岗位内核并进入工作台</button>}
+          {running ? <button className="cold-start stop" onClick={() => abortRef.current?.abort()}><Square size={12} /> 停止本轮构建</button> : <button className="cold-start" disabled={roleTitle.trim().length < 2 || (!configuredRuntime.modelReady && !offlineMode)} onClick={() => void startBuild()}><Play size={13} /> {offlineMode ? "保存离线候选内核" : "生成岗位内核并进入工作台"}</button>}
           {result && !running ? <button className="cold-start" onClick={() => void startBuild({ reuseProjectSources: true })}><Layers3 size={13} /> 复用已索引来源重跑抽取</button> : null}
           {result && projectId ? <Link className="cold-open-project" href={skillIntent === "snapshot-iteration" ? `/snapshots/${encodeURIComponent(result.snapshot.id)}/iterate?profile=co_guided&project=${encodeURIComponent(projectId)}&conversation=${encodeURIComponent(conversationId)}` : `/projects/${projectId}?conversation=${conversationId}`}>{skillIntent === "snapshot-iteration" ? "进入岗位快照迭代" : "打开项目工作台"} <ArrowLeft size={12} /></Link> : null}
         </section>

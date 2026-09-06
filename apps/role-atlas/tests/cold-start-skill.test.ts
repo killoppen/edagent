@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createOfflineModelInvoker } from "@/lib/agent/model";
 import type { ModelInvoker } from "@/lib/agent/model";
 import { createColdStartSkill } from "@/lib/build/graph";
 import type { BuildEvent } from "@/lib/build/events";
@@ -84,6 +85,23 @@ function request(): ColdStartRequest {
     }],
   };
 }
+
+test("离线候选模式不调用模型或联网，并保留岗位边界与研究缺口", async () => {
+  const graph = createColdStartSkill(createOfflineModelInvoker(), { offline: true });
+  const events: BuildEvent[] = [];
+  const stream = await graph.stream(
+    { request: request(), laneFailures: [] },
+    { configurable: { thread_id: "cold-start-offline" }, streamMode: "custom" },
+  );
+  for await (const event of stream) events.push(event as BuildEvent);
+  const completed = events.find((event) => event.kind === "build.kernel.completed");
+  assert.ok(completed);
+  const result = completed.payload.result as ColdStartBuildResult;
+  assert.equal(result.build?.enrichment?.status, "degraded");
+  assert.equal(result.build?.enrichment?.pendingLanes.length, 0);
+  assert.ok(result.semantic.nodes.some((node) => node.type === "market_role"));
+  assert.ok(result.audit.issues.some((issue) => issue.code === "LANE_FALLBACK"));
+});
 
 test("冷启动 Skill 从共享证据编译含三命名空间的统一岗位包", async () => {
   const graph = createColdStartSkill(fakeModel);

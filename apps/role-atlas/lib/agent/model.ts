@@ -178,3 +178,9 @@ export function createModelInvoker(input: ProviderConfig, fetchImpl: FetchLike =
     }
   };
 }
+
+export function createOfflineModelInvoker(): ModelInvoker {
+  return async function* () {
+    return;
+  };
+}
