@@ -1,5 +1,25 @@
 # LearnFlow 架构权威与维护边界
 
+Contract impact（`2026-09-05.3`）：即时教学指导与长期记忆合成解耦。新增原始教学输入事件，确定性归约至五核短期 `teaching_directives` 与明确持续 Human `teaching_preferences`；一次明确请求即可生效，保留来源、范围、到期与取消。控制投影不重复送入 Module/Claim，长期能力门槛保持独立。Tutor 每次生成前自动获得有界指导，规划复用同一投影。无数据库迁移；完整合同见 `docs/IMMEDIATE_TEACHING_GUIDANCE.md`。
+
+Contract impact（`2026-09-05.2`）：五核升级修复语义来源、目标/偏好更新、撤回与长期候选窗口。新增 `semantic_observation_proposed` 事件，仅保留有原事件引用的短期候选；Module policy v2按独立事件与类型化能力证据门更新。检索先作用域过滤，关联路径统一答案/人因/有效状态边界，SUPERSEDES作为已解决更新。Tutor保留时间与范围并支持真实重检索；学习任务消费有scope的证据，重做失败不代表明确拒绝讲法，无变式不显示可迁移。画像面向当前重点/基础/进展/支持方式。无需数据库结构迁移，旧事件保留；真实学习收益仍待试点。实施与兼容边界见 `docs/MEMORY_UPGRADE_IMPLEMENTATION.md`。
+
+Contract impact（`2026-09-05.1`）：项目保留 `project_kind="apprenticeship"`，新增兼容的
+`project_mode=learning/experiment/practice` 与简报字段；三类项目继续使用已有
+Project/Roadmap/Checkpoint/Session/LearningTask。工作台恢复、阅读记录和阶段交付新增操作记录，
+不成为第二套掌握权威。按用户明确要求，桌面新增 `desktop_experiment_runner` 的固定 `c11`
+Profile：只在桌面令牌、登录和项目归属均通过后，为所选文件生成快照预览，用户确认对应 hash
+与 trusted-local 边界才可执行。固定参数数组只支持语法检查、构建、运行和可见样例验证，不开放
+Shell/Makefile/任意命令；进程没有 OS 文件、网络、凭据或资源隔离。实验启动/完成以及工作台、
+阅读、交付事件均为零 kernel target；路线物化仍复用既有 `roadmap_applied`，正式学习证据继续
+进入原 LearningAttempt 与 reducer 链。新表和默认学习模式向后兼容，不改变既有评分合同。
+
+Contract impact（`2026-09-04.1`）：桌宠选区转录仍复用
+`capture_desktop_pet_selection` 与 `desktop_pet_gateway`，不新增 Agent、能力、事件或
+五核写入。快捷键由跨平台 Tauri 服务从桌宠偏好注册；Windows 使用原生选区读取并回退
+前台截图，macOS 使用系统交互式区域截图。截图只在带随机标识的临时文件中短暂存在，
+随后进入现有账户视觉模型和 `ocr_text` TTL 上下文链路。
+
 Contract impact（`2026-09-03.3`）：桌宠高亮选区转录保持 `Ctrl+Alt+P` 和既有 `capture_desktop_pet_selection` 入口不变，但改为在快捷键触发瞬间记录原前台窗口，优先通过本机 `Ctrl+C` 读取 Unicode 选区并立即恢复用户剪贴板；读取不到可复制文本时，向后兼容地回退到原有前台窗口截图与账户视觉模型转录。两条路径均只在桌宠本地保留预览，发送后才进入既有 `ocr_text` TTL 上下文，不新增 Agent、能力、事件、数据库表或五核写入。
 
 Contract impact（`2026-09-03.2`）：桌宠图片视觉改为当前账户范围内的视觉模型解析。设置页可独立加密保存视觉 API Key、Base URL 与模型名，也可显式复用同一账户的 Tutor Key；独立视觉密钥使用不同 AAD 用途，桌宠 capability 不携带任何明文凭据。图片原始字节仍只在请求内存中存在，视觉输出仅是需确认、单回合消费的 `image_observation` 临时上下文，不写入 AgentMessage、EvidenceEvent、五核或长期记忆。
@@ -639,7 +659,18 @@ frontend 当前没有该 route，所以 `learner_growth` lifecycle 为 `optional
 - 同一关讲义和练习显示同一个关卡 Tutor；学习设计与实践验证 Agent 仍是内部能力接口，不成为第四类主 Agent，也不维护另一份聊天历史。
 - 关卡上下文只装配本关 brief、分配资源摘要、讲义/练习摘要、项目文件树和本关消息；文件正文必须按需读取，其他关卡资源与聊天不得进入。
 - `workspace_linked`、`workspace_change_applied` 属于零 kernel target 的操作事件。
-- 普通项目文件只有查看和轻量文本编辑能力，不提供编译、解释器、终端或运行入口。
+- 普通项目文件支持查看和轻量文本编辑。桌面实验入口只开放已登记 `desktop_experiment_runner`
+  的固定 `c11` Profile，由本机 clang/gcc 进行语法检查、构建、运行或可见标准输入输出样例验证；
+  不接受任意命令、Shell、Makefile、安装脚本或通用解释器。浏览器部署仍隐藏所有实验文件与执行接口。
+- 实验必须先预览所选源码、头文件和允许的数据文件清单、内容 hash、操作及运行边界，再由用户明确
+  确认 `snapshot_hash + acknowledge_trusted_local=true`。缺少桌面令牌、登录或项目/关卡归属时拒绝，
+  模型不能自行确认。预览过期、关联目录变化、源码或副本变化时拒绝旧确认；排队后执行前再核对副本。
+- 快照复制过程复用项目路径与符号链接边界；构建产物放在应用 runtime 下，宿主不会自动写回项目。
+  编译器与程序是拥有本机用户权限的 trusted-local 进程，仍可能自行访问或修改其他文件、联网和读取
+  凭据。临时副本、环境变量白名单、超时和输出上限都不构成 OS 沙箱，也不限制内存或磁盘写入。
+- `ExperimentRun` 保存配置、输入 manifest/hash、确认、输出与结束状态；重复确认不重复执行，重启
+  后未完成运行标为 `interrupted` 且不自动重跑。`experiment_run_started`、`experiment_run_completed`
+  均为零 kernel target；语法通过、构建通过、样例通过和阶段交付接受都不等于正式独立验证或掌握。
 - `.lflecture/.lfexercise` 是数据库学习对象的逻辑文件入口；讲义修改通过 `base_version` 版本化保存，练习只能修改个人草稿与批注。
 - 练习草稿和原有练习“运行”都不写掌握证据；正式提交继续走 `LearningAttempt -> EvidenceEvent`，重复 `client_submission_id` 只产生一次尝试与评估事件。
 - 本地代码 Agent 通过独立 `local_agent_broker` 工具接入，它仍由 Tutor 控制 Agent 所有，不构成第四类主 Agent，也不能修改学习对象和五核。Tutor 只提交任务类型、目标、约束和所需能力；Broker 按 capability 与 priority 确定性选择已启用 Profile。

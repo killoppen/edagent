@@ -7,7 +7,7 @@ import type {
   PersonalPathNodeProposal,
 } from './learning-path-graph'
 import type { PlanningEvent, ValueClaimProposal } from './planning'
-import type { FormalProjectWorkspace, ProjectRoadmapProposal } from './project'
+import type { FormalProjectWorkspace, ProjectRoadmapProposal, ProjectMode, ProjectBrief } from './project'
 import {
   activateRuntimeAuth,
   captureRuntimeAuth,
@@ -715,7 +715,7 @@ export async function bootstrapFormalRuntime(): Promise<{ connection: FormalRunt
 
 export async function syncFormalEvent(event: LearningEvent | PlanningEvent | {
   id: string
-  type: 'chat_mode_entered' | 'learning_action_segment_completed' | 'vnext_human_adaptation_requested' | 'vnext_planning_profile_self_reported'
+  type: 'chat_mode_entered' | 'learning_action_segment_completed' | 'vnext_human_adaptation_requested' | 'vnext_planning_profile_self_reported' | 'vnext_teaching_input_received'
   at: number
   detail: string
   payload?: Record<string, unknown>
@@ -744,6 +744,29 @@ export async function syncFormalEvent(event: LearningEvent | PlanningEvent | {
       checkpoint_id: typeof explicitScope.checkpoint_id === 'number' ? explicitScope.checkpoint_id : undefined,
       payload,
     }),
+  })
+}
+
+/** Only direct learner text enters this evidence event; never attach tool context. */
+export async function syncFormalTeachingInput(input: {
+  messageId: string
+  text: string
+  occurredAt: number
+  sessionId?: number
+  projectId?: number
+  checkpointId?: number
+}) {
+  return syncFormalEvent({
+    id: `teaching-input:${input.messageId}`,
+    type: 'vnext_teaching_input_received',
+    at: input.occurredAt,
+    detail: '学习者本轮直接输入',
+    payload: {
+      text: input.text,
+      session_id: input.sessionId,
+      project_id: input.projectId,
+      checkpoint_id: input.checkpointId,
+    },
   })
 }
 
@@ -848,6 +871,21 @@ export async function recordFormalConceptStatement(rawText: string, clientEventI
       source_tag: 'user_self_input',
       client_event_id: clientEventId,
     }),
+  })
+}
+
+/** Native turn owns its own evidence write; an empty direct text excludes control/context. */
+export async function requestFormalTutorTurn(sessionId: number, input: {
+  message: string
+  direct_user_text: string
+  client_turn_id: string
+  project_id?: number
+  checkpoint_id?: number
+  selected_skill_id?: string
+  context?: Record<string, unknown>
+}, signal?: AbortSignal) {
+  return jsonRequest<{ message?: unknown }>(`/api/agent/sessions/${sessionId}/turns`, {
+    method: 'POST', body: JSON.stringify(input), signal,
   })
 }
 
@@ -996,7 +1034,7 @@ export async function listFormalProjects() {
 }
 
 export async function createFormalProject(input: {
-  name: string; objective: string; expectedOutcome: string; userLevel?: string
+  name: string; objective: string; expectedOutcome: string; userLevel?: string; projectMode?: ProjectMode; projectBrief?: ProjectBrief
 }) {
   await ensureFormalIdentity()
   return jsonRequest<FormalProjectWorkspace>('/api/vnext-projects', {
@@ -1006,6 +1044,8 @@ export async function createFormalProject(input: {
       objective: input.objective,
       expected_outcome: input.expectedOutcome,
       user_level: input.userLevel || 'beginner',
+      project_mode: input.projectMode || 'learning',
+      project_brief: input.projectBrief || { deliverables: [], constraints: [], success_criteria: [] },
     }),
   })
 }
@@ -1234,6 +1274,7 @@ export async function advanceFormalLearningSkillTurn(
   expectedVersion: number,
   clientTurnId: string,
   domainSourceIds: number[] = [],
+  directUserText?: string,
 ) {
   return jsonRequest<{
     session_id: number
@@ -1244,6 +1285,7 @@ export async function advanceFormalLearningSkillTurn(
     method: 'POST',
     body: JSON.stringify({
       message,
+      direct_user_text: directUserText ?? '',
       expected_version: expectedVersion,
       client_turn_id: clientTurnId,
       domain_source_ids: domainSourceIds.slice(0, 20),

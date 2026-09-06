@@ -31,6 +31,8 @@ from app.api.vnext_projects import router as vnext_projects_router
 from app.api.assessment_design import router as assessment_design_router
 from app.api.pet import router as pet_router
 from app.api.learning_task_integrations import router as learning_task_integrations_router
+from app.api.experiments import router as experiments_router
+from app.api.project_workflows import router as project_workflows_router
 from app.services.auth import enforce_browser_request_security
 
 
@@ -39,9 +41,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     from app.services.task_manager import mark_stale_tasks_failed
     from app.services.local_agent_broker import mark_interrupted_runs_failed
+    from app.services.experiment_runner import mark_interrupted_experiment_runs
     from app.services.memory_worker import memory_worker_loop
     await mark_stale_tasks_failed()
     await mark_interrupted_runs_failed()
+    await mark_interrupted_experiment_runs()
     stop_memory_worker = asyncio.Event()
     memory_task = asyncio.create_task(memory_worker_loop(stop_memory_worker))
     try:
@@ -112,3 +116,5 @@ app.include_router(vnext_projects_router, prefix="/api")
 app.include_router(assessment_design_router, prefix="/api")
 app.include_router(pet_router, prefix="/api")
 app.include_router(learning_task_integrations_router, prefix="/api")
+app.include_router(experiments_router, prefix="/api")
+app.include_router(project_workflows_router, prefix="/api")

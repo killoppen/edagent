@@ -1,6 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { deletePaperSheet, findPaperSheetByArtifact, paperAncestorChain, sanitizePaperSheets } from '../src/paper-workbench.ts'
+import { deletePaperSheet, findPaperSheetByArtifact, paperAncestorChain, paperSelectionContext, sanitizePaperSheets } from '../src/paper-workbench.ts'
+
+test('local file Tutor context identifies saved and unsaved selections without losing indentation', () => {
+  const sheet = { quote: '  return value;\n', artifact: { kind: 'workspace_file' as const, path: 'src/main.c', ref: 'src/main.c', title: '选区', startLine: 4, endLine: 4 } }
+  assert.match(paperSelectionContext(sheet)!, /src\/main\.c\n版本：未保存草稿\n行：4-4\n\n  return value;\n$/)
+  assert.match(paperSelectionContext({ ...sheet, artifact: { ...sheet.artifact, revision: 'a'.repeat(64) } })!, /版本：a{64}/)
+})
 
 test('paper sanitizer preserves nested learning files and source papers', () => {
   const sheets = sanitizePaperSheets([
@@ -45,4 +51,18 @@ test('the same learning file has one canonical paper and keeps descendants reach
   assert.equal(findPaperSheetByArtifact(sheets, { kind: 'practice', ref: 'ps-1', title: 'QKV' })?.id, 'practice-current')
   assert.deepEqual(findPaperSheetByArtifact(sheets, { kind: 'practice', ref: 'ps-1', title: 'QKV' })?.messages, [{ id: 'm-old' }, { id: 'm-current' }])
   assert.equal(sheets.find(sheet => sheet.id === 'follow-up')?.parentSheetId, 'practice-current')
+})
+
+test('file question papers retain exact code and distinct revisions after restore', () => {
+  const quote = 'if (count == 0) {\n  return -1;\n}'
+  const artifact = { kind: 'workspace_file', ref: 'src/main.c@abc:10-12', title: '边界条件', projectId: 7, path: 'src/main.c', revision: 'abc', startLine: 10, endLine: 12 }
+  const sheets = sanitizePaperSheets(JSON.parse(JSON.stringify([
+    { id: 'old', quote, parentSheetId: 'main', artifact, messages: [{ id: 'm1' }] },
+    { id: 'new', quote: 'return count;', parentSheetId: 'main', artifact: { ...artifact, ref: 'src/main.c@def:10-12', revision: 'def' }, messages: [] },
+  ])))
+  assert.equal(sheets.length, 2)
+  assert.equal(sheets[0].quote, quote)
+  assert.deepEqual(sheets[0].artifact, artifact)
+  assert.deepEqual(paperAncestorChain(sheets, 'new').map(sheet => sheet.id), ['new'])
+  assert.equal(deletePaperSheet(sheets, 'old').sheets[0].artifact?.revision, 'def')
 })

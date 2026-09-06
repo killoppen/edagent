@@ -1,5 +1,9 @@
 import type { FormalLearningFileRef, FormalLearningTask } from './formal-runtime'
 
+export type ProjectMode = 'learning' | 'experiment' | 'practice'
+
+export type ProjectBrief = { deliverables: string[]; constraints: string[]; success_criteria: string[] }
+
 export type ProjectCheckpointProposal = {
   id?: number
   key: string
@@ -55,6 +59,8 @@ export type FormalProjectWorkspace = {
     objective: string
     expected_outcome: string
     user_level: string
+    project_mode?: ProjectMode
+    project_brief?: ProjectBrief
     created_at?: string | null
   }
   project_tutor: { session_id: number; title: string; mode: 'learning_plan' }
@@ -81,6 +87,7 @@ export type AgentProjectContext = {
   schema_version: 'vnext.project.v1'
   project: FormalProjectWorkspace['project']
   checkpoint_id?: number | null
+  project_workflow?: Record<string, unknown>
   roadmap: { id?: number | null; revision: number; checkpoints: Array<Record<string, unknown>> }
   learning_tasks: FormalLearningTask[]
   sources: FormalProjectWorkspace['sources']

@@ -70,3 +70,10 @@ make verify
 架构权威见 [docs/ARCHITECTURE_AUTHORITY.md](docs/ARCHITECTURE_AUTHORITY.md)，Agent 工程约束见
 [docs/AGENT_ARCHITECTURE_GUIDE.md](docs/AGENT_ARCHITECTURE_GUIDE.md)，一分钟产品逻辑见
 [docs/product/LOGIC.md](docs/product/LOGIC.md)。仓库维护规则见 [AGENTS.md](AGENTS.md)。
+
+桌面项目与上线规划见 [三类学习项目产品规格](docs/product/THREE_PROJECT_MODELS.md) 和
+[产品上线部署与数据归属](docs/implementation/PRODUCT_DEPLOYMENT_AND_DATA_OWNERSHIP.md)。两份文档区分当前实现与待实现建议，
+覆盖资料学习、本地实验、工作案例实践，以及 Web、Desktop、Role Atlas 和 Graph Hub 的职责与数据边界。
+
+本地实现与启动见 [三类项目工作台](docs/implementation/LOCAL_PROJECT_WORKBENCH.md)。课程库与实验指导的参考、
+思考引导设计见 [计算机课程实践库调研](docs/research/CS_PRACTICE_LIBRARY_GUIDANCE.md)。

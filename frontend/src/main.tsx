@@ -134,6 +134,7 @@ import {
   startFormalLearningSkillRun,
   syncFormalGlobalChatWithRecovery,
   syncFormalEvent,
+  syncFormalTeachingInput,
   syncFormalEvents,
   updateFormalLearnerProfile,
   uploadKnowledgeLibraryFile,
@@ -161,6 +162,7 @@ import {
   paperAncestorChain,
   sanitizePaperSheets,
   type PaperArtifact,
+  paperSelectionContext,
   type PaperSheet,
 } from './paper-workbench'
 import './styles.css'
@@ -188,6 +190,11 @@ type Message = {
   streaming?: boolean
   streamingPhase?: string
   pluginResultProjection?: boolean
+  /** Direct composer text, excluding attached plugin context; preserved for retries. */
+  directUserText?: string
+  teachingInputRecordedBySkillTurn?: boolean
+  retryableTutorError?: boolean
+  formalSkillSyncPending?: 'start' | 'advance'
   /** Internal control payload produced by an explicit plugin button click. */
   hiddenFromTranscript?: boolean
 }
@@ -355,6 +362,10 @@ function messageFromFormal(message: FormalTutorMessage): Message {
     learningGoalKind: ['learning_task', 'planning_goal', 'conversation_topic'].includes(String(vnext.learningGoalKind))
       ? vnext.learningGoalKind as Message['learningGoalKind']
       : undefined,
+    directUserText: typeof vnext.directUserText === 'string' ? vnext.directUserText : undefined,
+    teachingInputRecordedBySkillTurn: vnext.teachingInputRecordedBySkillTurn === true,
+    retryableTutorError: vnext.retryableTutorError === true,
+    formalSkillSyncPending: vnext.formalSkillSyncPending === 'start' || vnext.formalSkillSyncPending === 'advance' ? vnext.formalSkillSyncPending : undefined,
     hiddenFromTranscript: vnext.hiddenFromTranscript === true,
     persistedByTutor: message.meta_data?.source !== 'vnext_chat_session_store',
   }
@@ -374,6 +385,10 @@ function syncMessageMetaData(message: Message): Record<string, unknown> {
     formalTaskId: message.formalTaskId,
     learningGoal: message.learningGoal,
     learningGoalKind: message.learningGoalKind,
+    directUserText: message.directUserText,
+    teachingInputRecordedBySkillTurn: message.teachingInputRecordedBySkillTurn,
+    retryableTutorError: message.retryableTutorError,
+    formalSkillSyncPending: message.formalSkillSyncPending,
     hiddenFromTranscript: message.hiddenFromTranscript,
   }
 }
@@ -713,15 +728,26 @@ function App({ auth }: { auth: AuthGateSession }) {
   const rolePackageLaunchStarted = useRef(false)
   const formalChatFingerprints = useRef<Record<string, string>>({})
   const paperAttachIntents = useRef(new Map<string, string>())
+  const preparedProjectConversations = useRef(new Map<number, Conversation>())
+  const dirtyProjectFiles = useRef(new Set<number>())
+  const [projectTutorConversationIds, setProjectTutorConversationIds] = useState<Record<number, string>>({})
 
   const activeTab = workspace.tabs.find(tab => tab.id === workspace.activeTabId) || workspace.tabs[0]
   const splitTab = workspace.tabs.find(tab => tab.id === workspace.splitTabId && tab.id !== activeTab?.id)
   const activeConversation = activeTab?.kind === 'chat'
     ? workspace.conversations.find(item => item.id === activeTab.conversationId)
-    : undefined
+    : activeTab?.kind === 'project' && activeTab.projectId
+      ? workspace.conversations.find(item => item.id === projectTutorConversationIds[activeTab.projectId!])
+      : undefined
   const splitConversation = splitTab?.kind === 'chat'
     ? workspace.conversations.find(item => item.id === splitTab.conversationId)
     : undefined
+
+  useEffect(() => {
+    for (const [sessionId, conversation] of preparedProjectConversations.current) {
+      if (workspace.conversations.some(item => item.id === conversation.id)) preparedProjectConversations.current.delete(sessionId)
+    }
+  }, [workspace.conversations])
 
   useEffect(() => {
     if (!isDesktopRuntime()) return
@@ -973,7 +999,13 @@ function App({ auth }: { auth: AuthGateSession }) {
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [paperDeskView])
 
+  const allowProjectLeave = (tabs: Array<WorkspaceTab | undefined>) => {
+    const dirty = tabs.some(tab => tab?.kind === 'project' && tab.projectId && dirtyProjectFiles.current.has(tab.projectId))
+    return !dirty || window.confirm('有未保存的本地文件。离开会放弃这些代码草稿，确定离开吗？')
+  }
+
   const openTab = (next: WorkspaceTab) => {
+    if (next.id !== activeTab?.id && !allowProjectLeave([activeTab, next.id === splitTab?.id ? splitTab : undefined])) return
     setWorkspace(previous => {
       const existing = previous.tabs.find(tab => tab.id === next.id)
       const tabs = existing
@@ -1160,6 +1192,7 @@ function App({ auth }: { auth: AuthGateSession }) {
   }, [activeConversation?.formalSessionId, workspace.conversations])
 
   const newConversation = () => {
+    if (!allowProjectLeave([activeTab])) return
     const conversation = createConversation()
     const tab = chatTab(conversation)
     setWorkspace(previous => {
@@ -1188,7 +1221,7 @@ function App({ auth }: { auth: AuthGateSession }) {
   const openProjectConversation = (
     projectWorkspace: FormalProjectWorkspace,
     role: 'tutor' | 'checkpoint' | 'free',
-    options: { checkpoint?: FormalProjectCheckpoint; session?: { session_id: number; title: string } } = {},
+    options: { checkpoint?: FormalProjectCheckpoint; session?: { session_id: number; title: string }; background?: boolean } = {},
   ) => {
     const checkpoint = options.checkpoint
     const formalSessionId = role === 'tutor'
@@ -1199,12 +1232,16 @@ function App({ auth }: { auth: AuthGateSession }) {
       && item.projectRole === role
       && (role !== 'checkpoint' || item.checkpointId === checkpoint?.id)
       && item.formalSessionId === formalSessionId)
+      || (formalSessionId ? preparedProjectConversations.current.get(formalSessionId) : undefined)
     if (existing) {
-      syncProjectWorkspace(projectWorkspace)
-      openTab(chatTab({ ...existing, projectSources: projectWorkspace.sources }))
-      return
+      if (!options.background) {
+        syncProjectWorkspace(projectWorkspace)
+        openTab(chatTab({ ...existing, projectSources: projectWorkspace.sources }))
+      }
+      return existing
     }
     const now = Date.now()
+    if (!options.background && !allowProjectLeave([activeTab])) return
     const base = createConversation()
     let learningTasks: LearningTask[] = []
     let learningEvents: LearningEvent[] = []
@@ -1238,12 +1275,49 @@ function App({ auth }: { auth: AuthGateSession }) {
       messages: [{ id: uid('message'), role: 'assistant', content: intro, createdAt: now, tutorMode: mode }],
     }
     const tab = chatTab(conversation)
+    if (formalSessionId) preparedProjectConversations.current.set(formalSessionId, conversation)
     setWorkspace(previous => ({
       ...previous,
       conversations: [conversation, ...previous.conversations],
-      tabs: [...previous.tabs, tab].slice(-12),
-      activeTabId: tab.id,
+      tabs: options.background ? previous.tabs : [...previous.tabs, tab].slice(-12),
+      activeTabId: options.background ? previous.activeTabId : tab.id,
     }))
+    return conversation
+  }
+
+  const prepareProjectTutor = (projectWorkspace: FormalProjectWorkspace, checkpoint?: FormalProjectCheckpoint) => {
+    const conversation = openProjectConversation(projectWorkspace, checkpoint ? 'checkpoint' : 'tutor', { checkpoint, background: true })
+    if (!conversation) return
+    setProjectTutorConversationIds(previous => previous[projectWorkspace.project.id] === conversation.id
+      ? previous : { ...previous, [projectWorkspace.project.id]: conversation.id })
+    return conversation
+  }
+
+  const askProjectSelection = (selection: {
+    workspace: FormalProjectWorkspace; checkpoint?: FormalProjectCheckpoint; path?: string; hash?: string
+    startLine?: number; endLine?: number; text: string; title: string
+  }) => {
+    const conversation = prepareProjectTutor(selection.workspace, selection.checkpoint)
+    if (!conversation) return
+    const text = selection.text.slice(0, 2400)
+    if (!text.trim()) return
+    const sheet: FollowUpSheet = {
+      id: uid('sheet'), title: selection.title.slice(0, 180), quote: text,
+      sourceMessageId: '', parentSheetId: 'main', messages: [], createdAt: Date.now(),
+      artifact: {
+        kind: selection.path ? 'workspace_file' : 'project_note',
+        ref: selection.path ? `${selection.path}@${selection.hash || 'draft'}:${selection.startLine || 1}-${selection.endLine || selection.startLine || 1}` : uid('note'),
+        title: selection.title, projectId: selection.workspace.project.id,
+        ...(selection.path ? { path: selection.path, revision: selection.hash, startLine: selection.startLine, endLine: selection.endLine } : {}),
+      },
+    }
+    setPaperDeskView(null)
+    setWorkspace(previous => ({
+      ...previous,
+      conversations: previous.conversations.map(item => item.id === conversation.id
+        ? { ...item, sheets: [...item.sheets, sheet], activeSheetId: sheet.id, updatedAt: Date.now() } : item),
+    }))
+    setDrafts(previous => ({ ...previous, [surfaceKey(conversation.id, sheet.id)]: '请结合当前关卡，引导我分析这段内容。先给一个值得验证的问题。' }))
   }
 
   const openProjectTutor = async (projectId: number) => {
@@ -1251,7 +1325,7 @@ function App({ auth }: { auth: AuthGateSession }) {
       const projectWorkspace = await loadFormalProject(projectId)
       syncProjectWorkspace(projectWorkspace)
       setExpandedProjects(previous => ({ ...previous, [projectId]: true }))
-      openProjectConversation(projectWorkspace, 'tutor')
+      openTab(projectTab(projectWorkspace.project))
     } catch (error) {
       setFormalError(error instanceof Error ? error.message : '项目加载失败')
     }
@@ -1275,6 +1349,7 @@ function App({ auth }: { auth: AuthGateSession }) {
   }
 
   const closeTab = (tabId: string) => {
+    if (!allowProjectLeave([workspace.tabs.find(tab => tab.id === tabId)])) return
     setWorkspace(previous => {
       const index = previous.tabs.findIndex(tab => tab.id === tabId)
       if (index < 0) return previous
@@ -1308,6 +1383,7 @@ function App({ auth }: { auth: AuthGateSession }) {
   }
 
   const toggleSplit = (tabId: string) => {
+    if (!allowProjectLeave([splitTab])) return
     setWorkspace(previous => {
       if (tabId === previous.activeTabId || !previous.tabs.some(tab => tab.id === tabId)) return previous
       return { ...previous, splitTabId: previous.splitTabId === tabId ? '' : tabId }
@@ -1315,6 +1391,7 @@ function App({ auth }: { auth: AuthGateSession }) {
   }
 
   const closeSplit = () => {
+    if (!allowProjectLeave([splitTab])) return
     setWorkspace(previous => ({ ...previous, splitTabId: '' }))
   }
 
@@ -1591,6 +1668,7 @@ function App({ auth }: { auth: AuthGateSession }) {
     preferredConversationId?: string,
     anchor?: { sourceMessageId?: string; parentSheetId?: string },
   ) => {
+    if (!allowProjectLeave([activeTab])) return
     setPaperDeskView(null)
     const activeConversationId = workspace.tabs.find(tab => tab.id === workspace.activeTabId)?.conversationId
     const origin = workspace.conversations.find(item => item.id === preferredConversationId)
@@ -1632,7 +1710,7 @@ function App({ auth }: { auth: AuthGateSession }) {
         activeTabId: tab.id,
       }
     })
-    void recordLearningFileAccess(file.kind, file.ref, 'attached', {
+    if (file.kind === 'lecture' || file.kind === 'practice' || file.kind === 'source') void recordLearningFileAccess(file.kind, file.ref, 'attached', {
       conversation_id: origin.id,
       sheet_id: sheetId,
     }).catch(() => undefined)
@@ -1785,6 +1863,7 @@ function App({ auth }: { auth: AuthGateSession }) {
     conversationId: string,
     rawContent: string,
     options: {
+      directUserText?: string
       replayInterruptedTurn?: boolean
       hideUserMessage?: boolean
       referencedPluginObjects?: LearnFlowPluginObject[]
@@ -1822,12 +1901,36 @@ function App({ auth }: { auth: AuthGateSession }) {
     let planningProjection = activeLearningPlanProjection(learningPlans, planningEvents)
     let createdLocalTask: LearningTask | undefined
     let formalSessionId = conversation.formalSessionId
+    const rememberFormalSession = (sessionId: number) => {
+      formalSessionId = sessionId
+      // Persist the scope before the next network request can fail or time out.
+      setWorkspace(previous => ({
+        ...previous,
+        conversations: previous.conversations.map(item => item.id === conversationId
+          ? { ...item, formalSessionId: sessionId } : item),
+      }))
+      return sessionId
+    }
     let formalSkillRun: FormalLearningSkillRun | undefined
     let formalSnapshotForTurn = formalSnapshot
     const replayInterruptedTurn = Boolean(options.replayInterruptedTurn)
-    const clientTurnId = `vnext-turn:${conversationId}:${now}`.slice(0, 120)
     const activeConversationMessages = activeMessages(conversation)
-    const interruptedMode = activeConversationMessages[activeConversationMessages.length - 1]?.tutorMode
+    const previousUserMessage = [...activeConversationMessages].reverse().find(item => item.role === 'user' && !item.hiddenFromTranscript)
+    let preparedSkillTurn = Boolean(replayInterruptedTurn && previousUserMessage?.teachingInputRecordedBySkillTurn)
+    const userMessageId = replayInterruptedTurn && previousUserMessage ? previousUserMessage.id : uid('message')
+    const updateUserMessageMetadata = (patch: Partial<Message>) => setWorkspace(previous => ({
+      ...previous,
+      conversations: previous.conversations.map(item => item.id === conversationId ? {
+        ...item,
+        messages: item.messages.map(message => message.id === userMessageId ? { ...message, ...patch } : message),
+        sheets: item.sheets.map(sheet => ({ ...sheet,
+          messages: sheet.messages.map(message => message.id === userMessageId ? { ...message, ...patch } : message),
+        })),
+      } : item),
+    }))
+    const clientTurnId = `vnext-turn:${userMessageId}`.slice(0, 120)
+    const directUserText = options.hideUserMessage ? '' : options.directUserText?.trim() || (replayInterruptedTurn ? previousUserMessage?.directUserText || '' : '')
+    const interruptedMode = previousUserMessage?.tutorMode
     const mode = replayInterruptedTurn && isTutorMode(interruptedMode)
       ? interruptedMode
       : conversation.projectRole === 'tutor'
@@ -1922,9 +2025,10 @@ function App({ auth }: { auth: AuthGateSession }) {
         if (item.id !== conversationId) return item
         const firstStudentMessage = !hasVisibleStudentMessage(item.messages)
         const userMessage: Message = {
-          id: uid('message'), role: 'user', content, createdAt: now, tutorMode: mode,
+          id: userMessageId, role: 'user', content, createdAt: now, tutorMode: mode,
           persistedByTutor: isDesktopRuntime(),
           hiddenFromTranscript: Boolean(options.hideUserMessage),
+          directUserText: directUserText || undefined,
           learningSkillId: learningProjection?.skillId,
           learningSubstateId: optimisticTurnStep?.substateId,
           learningSubstateLabel: optimisticTurnStep?.substateLabel,
@@ -2012,13 +2116,23 @@ function App({ auth }: { auth: AuthGateSession }) {
       }
     }
 
-    if (!replayInterruptedTurn && formalConnection.status === 'connected') {
+    const retryFormalSkillTurn = replayInterruptedTurn && mode === 'guided_learning' && !preparedSkillTurn
+      && Boolean(previousUserMessage?.formalSkillSyncPending) && Boolean(learningProjection)
+    if ((!replayInterruptedTurn || retryFormalSkillTurn) && formalConnection.status === 'connected') {
+      // Remember the intended formal action before even session/profile sync:
+      // failure in those preceding requests must resume the same skill action.
+      const skillSyncAction = mode === 'guided_learning' && learningProjection
+        ? replayInterruptedTurn && previousUserMessage?.formalSkillSyncPending
+          ? previousUserMessage.formalSkillSyncPending
+          : createdLocalTask || !learningProjection.task.formalSkillRunId || !learningProjection.task.formalSkillRunVersion ? 'start' : 'advance'
+        : undefined
+      if (skillSyncAction) updateUserMessageMetadata({ formalSkillSyncPending: skillSyncAction })
       try {
         if (!conversation.projectId) {
           const session = await persistGlobalConversation(conversation)
-          formalSessionId = session?.id
+          if (session) formalSessionId = rememberFormalSession(session.id)
         }
-        const humanAdaptationSignals = detectHumanAdaptationSignals(content)
+        const humanAdaptationSignals = detectHumanAdaptationSignals(directUserText)
         for (const [index, signal] of humanAdaptationSignals.entries()) {
           await syncFormalEvent({
             id: `human-adaptation:${clientTurnId}:${index}`,
@@ -2039,10 +2153,10 @@ function App({ auth }: { auth: AuthGateSession }) {
           })
         }
         if (mode === 'learning_plan' && planningProjection) {
-          const selfReport = extractPlanningProfileSelfReport(
-            content,
+          const selfReport = directUserText ? extractPlanningProfileSelfReport(
+            directUserText,
             planningGoalSummary(planningProjection),
-          )
+          ) : null
           if (selfReport) {
             await syncFormalEvent({
               id: `planning-profile:${clientTurnId}`,
@@ -2076,10 +2190,10 @@ function App({ auth }: { auth: AuthGateSession }) {
               projectId: conversation.projectId,
               checkpointId: conversation.checkpointId,
             })
-            formalSessionId = session.id
+            formalSessionId = rememberFormalSession(session.id)
           }
           const binding = learningProjection.task
-          if (createdLocalTask || !binding.formalSkillRunId || !binding.formalSkillRunVersion) {
+          if (skillSyncAction === 'start') {
             const started = await startFormalLearningSkillRun(
               formalSessionId,
               learningProjection.skillId,
@@ -2089,7 +2203,9 @@ function App({ auth }: { auth: AuthGateSession }) {
               binding.formalTaskId,
             )
             formalSkillRun = started.active_skill_run
+            updateUserMessageMetadata({ formalSkillSyncPending: undefined })
           } else {
+            if (!binding.formalSkillRunId || !binding.formalSkillRunVersion) throw new Error('待恢复的正式学习回合缺少技能绑定')
             const advanced = await advanceFormalLearningSkillTurn(
               formalSessionId,
               binding.formalSkillRunId,
@@ -2097,8 +2213,11 @@ function App({ auth }: { auth: AuthGateSession }) {
               binding.formalSkillRunVersion,
               clientTurnId,
               conversation.projectId ? [] : conversation.domainSources.map(source => source.id),
+              directUserText,
             )
             formalSkillRun = advanced.active_skill_run
+            preparedSkillTurn = true
+            updateUserMessageMetadata({ teachingInputRecordedBySkillTurn: true, formalSkillSyncPending: undefined })
           }
           learningTasks = learningTasks.map(task => task.id === binding.id && formalSkillRun
             ? bindFormalSkillRun(task, formalSkillRun)
@@ -2135,7 +2254,47 @@ function App({ auth }: { auth: AuthGateSession }) {
         })
         await syncFormalEvents(atomicEvents)
       } catch (error) {
-        setFormalError(error instanceof Error ? error.message : '原子事件同步失败')
+        const detail = error instanceof Error ? error.message : '原子事件同步失败'
+        setFormalError(detail)
+        if (mode === 'guided_learning') {
+          // Do not fall through to a second evidence channel when the first
+          // request may have committed but its response was lost.
+          finishTurn(conversationId, sheetId, mode, {
+            role: 'system', retryableTutorError: true,
+            content: `本轮学习状态同步未确认，暂未开始回答：${detail}。请点击重新回答，系统会沿用本轮标识核对并继续。`,
+          })
+          return
+        }
+      }
+    }
+
+    // Complete the authoritative immediate-state write before the Tutor reads
+    // context. Replay reuses the persisted message ID, so it cannot add evidence.
+    if (!isDesktopRuntime() && !preparedSkillTurn && formalConnection.status === 'connected' && directUserText) {
+      try {
+        if (!formalSessionId) {
+          const session = await createFormalTutorSession(true, {
+            projectId: conversation.projectId, checkpointId: conversation.checkpointId,
+          })
+          formalSessionId = rememberFormalSession(session.id)
+        }
+        await syncFormalTeachingInput({
+          messageId: userMessageId,
+          text: directUserText,
+          occurredAt: replayInterruptedTurn && previousUserMessage ? previousUserMessage.createdAt : now,
+          sessionId: formalSessionId,
+          projectId: conversation.projectId,
+          checkpointId: conversation.checkpointId,
+        })
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : '同步失败'
+        setFormalError(`本轮教学需求尚未保存：${detail}`)
+        finishTurn(conversationId, sheetId, mode, {
+          role: 'system',
+          retryableTutorError: true,
+          content: `本轮教学需求尚未保存，暂未开始回答：${detail}。请重试。`,
+        })
+        return
       }
     }
 
@@ -2187,13 +2346,15 @@ function App({ auth }: { auth: AuthGateSession }) {
         ? formalSnapshotForTurn?.learning_tasks.find(task => task.id === learningProjection.task.formalTaskId)
         : undefined
       const reply = await requestTutorReply({
+        directUserText,
+        clientTurnId,
         baseUrl: workspace.settings.baseUrl,
         model: workspace.settings.model,
         mode,
         messages: contextMessages,
         toolChoice: toolChoices[draftKey] || 'auto',
-        selectionContext: activeSheet(conversation)?.quote,
-        activeArtifactContext: activeSheet(conversation)?.artifact,
+        selectionContext: paperSelectionContext(activeSheet(conversation)),
+        activeArtifactContext: (() => { const artifact = activeSheet(conversation)?.artifact; return artifact && ['lecture', 'practice', 'source'].includes(artifact.kind) ? artifact as PaperArtifact & { kind: 'lecture' | 'practice' | 'source' } : undefined })(),
         learningTaskContext: learningProjection ? learningTaskTutorContext(learningProjection) : undefined,
         learningPlanContext: planningProjection ? learningPlanTutorContext(planningProjection) : undefined,
         learnerPathState: formalSnapshotForTurn
@@ -2287,7 +2448,7 @@ function App({ auth }: { auth: AuthGateSession }) {
       : message
     if (!content.trim()) return
     setPluginDraftReferences(previous => ({ ...previous, [draftKey]: [] }))
-    await runTutorTurn(conversationId, content, { referencedPluginObjects: references })
+    await runTutorTurn(conversationId, content, { directUserText: message, referencedPluginObjects: references })
   }
 
   const updateLearningTask = async (
@@ -2766,7 +2927,7 @@ function App({ auth }: { auth: AuthGateSession }) {
     } finally { setFormalBusyKey('') }
   }
 
-  const renderTab = (tab: WorkspaceTab | undefined) => {
+  const renderTab = (tab: WorkspaceTab | undefined, embedded = false): ReactNode => {
     if (!tab) return null
     if (tab.kind === 'projects') {
       return <Suspense fallback={<div className="page-loading">正在载入学习项目…</div>}><ProjectsPage onOpen={project => { refreshFormalProjects(); void openProjectTutor(project.id) }} /></Suspense>
@@ -2775,12 +2936,23 @@ function App({ auth }: { auth: AuthGateSession }) {
       return (
         <Suspense fallback={<div className="page-loading">正在载入项目工作台…</div>}>
           <ProjectWorkspacePage
+            key={tab.projectId}
             projectId={tab.projectId}
+            onDirtyChange={dirty => { if (dirty) dirtyProjectFiles.current.add(tab.projectId!); else dirtyProjectFiles.current.delete(tab.projectId!) }}
             onOpenTutor={projectWorkspace => openProjectConversation(projectWorkspace, 'tutor')}
             onOpenCheckpoint={(projectWorkspace, checkpoint) => openProjectConversation(projectWorkspace, 'checkpoint', { checkpoint })}
             onOpenFree={(projectWorkspace, session) => openProjectConversation(projectWorkspace, 'free', { session })}
             onOpenFile={file => openTab(learningFileTab(file))}
             onGenerateFiles={generateTaskFiles}
+            onPrepareTutor={prepareProjectTutor}
+            renderTutor={(projectWorkspace, checkpoint) => {
+              const sessionId = checkpoint?.session_id || projectWorkspace.project_tutor.session_id
+              const conversation = workspace.conversations.find(item => item.formalSessionId === sessionId && item.projectId === projectWorkspace.project.id)
+              return conversation ? renderTab(chatTab(conversation), true) : <div className="page-loading">正在恢复导师会话…</div>
+            }}
+            onAskSelection={askProjectSelection}
+            onOpenReview={() => openTab(REVIEW_TAB)}
+            onWorkspaceChange={syncProjectWorkspace}
           />
         </Suspense>
       )
@@ -2932,7 +3104,7 @@ function App({ auth }: { auth: AuthGateSession }) {
           streamingPhase: liveTurn.phase,
         }]
       : persistedMessages
-    const interruptedTurn = recoverableTutorTurn(persistedMessages, Boolean(pendingMode))
+    const interruptedTurn = recoverableTutorTurn(persistedMessages.filter(message => !message.retryableTutorError), Boolean(pendingMode))
     const attachedSources = conversation.projectId ? conversation.projectSources : conversation.domainSources
     const hasWorkbench = conversation.sheets.length > 0
     const paperMode = paperDeskView?.conversationId === conversation.id ? paperDeskView.mode : 'stack'
@@ -2967,11 +3139,11 @@ function App({ auth }: { auth: AuthGateSession }) {
       }, 30)
     }
     return (
-      <section className={`chat-page${conversation.projectId ? ' project-chat-page' : ''}`}>
+      <section className={`chat-page${conversation.projectId ? ' project-chat-page' : ''}${embedded ? ' project-embedded-tutor' : ''}`}>
         <header className="chat-heading">
           <h1>{conversation.title}</h1>
           <div className="chat-state-stack">
-            {conversation.projectId && <button type="button" className="project-panel-toggle" aria-expanded={projectPanelConversationId === conversation.id} onClick={() => setProjectPanelConversationId(current => current === conversation.id ? '' : conversation.id)}>项目面板</button>}
+            {conversation.projectId && !embedded && <button type="button" className="project-panel-toggle" onClick={() => openTab({ id: `project:${conversation.projectId}`, kind: 'project', title: '项目工作台', projectId: conversation.projectId })}>项目工作台</button>}
             <span className={`mode-badge mode-badge-${visibleMode}`}>
               {TUTOR_MODE_LABELS[visibleMode]}{visibleSubstateLabel ? ` · ${visibleSubstateLabel}` : ''}
             </span>
@@ -3171,10 +3343,10 @@ function App({ auth }: { auth: AuthGateSession }) {
                       }} />
                     </Suspense>
                   )}
-                  {sheet && !sheet.artifact && (
+                  {sheet && (!sheet.artifact || ['workspace_file', 'project_note'].includes(sheet.artifact.kind)) && (
                     <blockquote className="selected-quote">
-                      <span>本页从这段原文展开</span>
-                      <p>{sheet.quote}</p>
+                      <span>{sheet.artifact?.path ? `${sheet.artifact.path} · L${sheet.artifact.startLine || 1}–${sheet.artifact.endLine || sheet.artifact.startLine || 1} · ${sheet.artifact.revision?.slice(0, 8) || '未保存草稿'}` : '本页从这段内容展开'}</span>
+                      <p style={{ whiteSpace: 'pre-wrap' }}>{sheet.quote}</p>
                     </blockquote>
                   )}
                   <MessageList
@@ -3549,7 +3721,7 @@ function App({ auth }: { auth: AuthGateSession }) {
             </div>
           </form>
         </div>
-        {conversation.projectId && projectPanelConversationId === conversation.id && (
+        {!embedded && conversation.projectId && projectPanelConversationId === conversation.id && (
           <Suspense fallback={<aside className="project-context-panel"><div className="page-loading">正在读取项目…</div></aside>}>
             <ProjectContextPanel
               projectId={conversation.projectId}

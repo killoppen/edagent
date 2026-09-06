@@ -47,6 +47,8 @@ EXTRA_COLUMNS = {
     "projects": [
         ("learner_id", "INTEGER"),
         ("project_kind", "TEXT DEFAULT 'apprenticeship'"),
+        ("project_mode", "TEXT NOT NULL DEFAULT 'learning'"),
+        ("project_brief", "JSON NOT NULL DEFAULT '{}'"),
         ("visibility", "TEXT DEFAULT 'visible'"),
     ],
     "learners": [

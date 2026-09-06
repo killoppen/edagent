@@ -1,5 +1,17 @@
 # LearnFlow 智能体架构与协作指南
 
+Contract impact（`2026-09-05.3`）：即时教学指导与长期记忆合成解耦。新增原始教学输入事件，确定性归约至五核短期 `teaching_directives` 与明确持续 Human `teaching_preferences`；一次明确请求即可生效，保留来源、范围、到期与取消。控制投影不重复送入 Module/Claim，长期能力门槛保持独立。Tutor 每次生成前自动获得有界指导，规划复用同一投影。无数据库迁移；完整合同见 `docs/IMMEDIATE_TEACHING_GUIDANCE.md`。
+
+Contract impact（`2026-09-05.2`）：五核升级修复语义来源、目标/偏好更新、撤回与长期候选窗口。新增 `semantic_observation_proposed` 事件，仅保留有原事件引用的短期候选；Module policy v2按独立事件与类型化能力证据门更新。检索先作用域过滤，关联路径统一答案/人因/有效状态边界，SUPERSEDES作为已解决更新。Tutor保留时间与范围并支持真实重检索；学习任务消费有scope的证据，重做失败不代表明确拒绝讲法，无变式不显示可迁移。画像面向当前重点/基础/进展/支持方式。无需数据库结构迁移，旧事件保留；真实学习收益仍待试点。实施与兼容边界见 `docs/MEMORY_UPGRADE_IMPLEMENTATION.md`。
+
+Contract impact（`2026-09-05.1`）：三类项目新增 `project_mode/project_brief` 与操作性工作台状态，继续复用正式 Project、Roadmap、Checkpoint、LearningTask 和 Session。桌面固定 C11 实验经快照预览和用户确认后执行，记录真实输出；案例按固定版本分阶段开放并记录提示程度；学习最终交付引用正式独立验证与复习。相关交付、纸张、阅读、提示、运行事件均零 kernel targets，流程通过不宣称掌握。Tutor 仅读取当前已开放阶段，普通文件选区明确携带路径、版本或未保存标识。详见[本地工作台](implementation/LOCAL_PROJECT_WORKBENCH.md)。
+
+Contract impact（`2026-09-04.1`）：桌宠选区入口继续由 `tutor_agent` 的
+`desktop_pet_gateway` 所有。全局快捷键改由跨平台 Tauri 服务按桌宠偏好注册；Windows
+保留原生可复制文本优先路径，macOS 使用系统交互式区域截图，截图仅在一次性临时文件中
+短暂存在并交给账户视觉模型。两条路径都只产生用户确认前的 TTL 临时上下文，不写
+`AgentMessage` 正文、`EvidenceEvent`、五核或长期记忆。
+
 Contract impact（`2026-09-03.3`）：桌宠选中文本入口仍由 `tutor_agent` 的 `desktop_pet_gateway` 所有。Windows 快捷键触发时先固定原前台窗口，优先本机读取用户主动选中的 Unicode 文本并恢复剪贴板；不可复制时才回退到原有前台截图和账户视觉模型。两条路径都只产生可编辑、TTL 限时的临时上下文，须用户发送后才消费一个正式 Tutor 回合，不写 AgentMessage 正文、EvidenceEvent、五核或长期记忆；快捷键、capability、API 和视觉回退保持向后兼容。
 
 Contract impact（`2026-09-03.2`）：桌宠视觉适配器使用当前账户的视觉模型配置：可独立保存加密视觉凭据，或显式回退同一账户的 Tutor 凭据；Base URL 与模型名称按账户保存。两类密钥使用不同 AAD 用途，桌宠 capability 不能读取凭据。截图仍须用户主动提供、确认并只随一个正式 Tutor 回合消费，视觉观察不构成掌握、评分、策略或五核证据。
@@ -687,7 +699,7 @@ link_project_workspace
 
 Agent 文件提案 MUST 绑定 `learner_id + project_id + checkpoint_id + session_id`，携带基础文件 SHA-256，并先返回 diff。确认前不落盘；确认时若文件已变化，提案自动失效。`.learnflow` 内的受管学习对象只能通过版本化领域能力修改，普通文件工具不得绕过。
 
-`.lflecture/.lfexercise` 只是数据库学习对象的逻辑文件入口：讲义按 `base_version` 保存并保留 `LectureVersion`，练习题面/答案/测试受保护，个人草稿与批注独立存储。普通文件支持 UTF-8 轻量编辑、Markdown 安全预览、图片/PDF 预览，但不提供解释器、终端或运行按钮。
+`.lflecture/.lfexercise` 只是数据库学习对象的逻辑文件入口：讲义按 `base_version` 保存并保留 `LectureVersion`，练习题面/答案/测试受保护，个人草稿与批注独立存储。普通文件支持 UTF-8 轻量编辑、Markdown 安全预览、图片/PDF 预览。桌面实验工作台另提供固定 C11 Profile，通过桌面令牌与归属验证、快照 hash 预览和明确确认执行；这是有界的可信本机进程，不是 OS 沙箱或通用终端。真实运行记录仅为操作证据，独立验证仍走正式 Practice 与证据链。
 
 文件关联与变更事件的 kernel target 为空。编辑成功、保存草稿和练习“运行”都不是掌握证据；只有播放器内的正式练习提交可进入评估链。本地代码 Agent 只能通过 Tutor 所有的 Broker 工具在隔离副本中工作，不新增第四类主 Agent。Tutor 只表达任务语义，Broker 按 Profile 能力/优先级确定性选择；首次确认启动，第二次确认并通过 hash 校验后写回，删除和移动逐项确认。安全细节以 `docs/DESKTOP_WORKSPACE_SECURITY.md` 为准。
 

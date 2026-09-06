@@ -49,13 +49,29 @@ type DesktopPetSelectionCapture = {
 type DesktopPetPreferences = {
   schemaVersion: number
   appearance: 'mist' | 'warm' | 'dusk'
-  shortcut: 'Ctrl+Alt+P' | 'Ctrl+Shift+P' | 'Alt+Shift+P'
+  shortcut: string
   reviewRemindersEnabled: boolean
   reviewReminderIntervalMinutes: 15 | 30 | 60
   mouseThrough: boolean
   edgeAutoHide: boolean
   geometry?: { x: number; y: number; width: number; height: number } | null
 }
+
+const DEFAULT_PET_SHORTCUT = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform)
+  ? 'Command+Option+P'
+  : 'Ctrl+Alt+P'
+
+const PET_SHORTCUT_OPTIONS = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform)
+  ? [
+      ['Command+Option+P', '⌘ + ⌥ + P'],
+      ['Command+Shift+P', '⌘ + ⇧ + P'],
+      ['Option+Shift+P', '⌥ + ⇧ + P'],
+    ]
+  : [
+      ['Ctrl+Alt+P', 'Ctrl + Alt + P'],
+      ['Ctrl+Shift+P', 'Ctrl + Shift + P'],
+      ['Alt+Shift+P', 'Alt + Shift + P'],
+    ]
 
 const OUTBOX_STORAGE_KEY = 'learnflow.desktop.pet.outbox.v1'
 const PET_VIEW_STORAGE_KEY = 'learnflow.desktop.pet.view.v1'
@@ -841,7 +857,7 @@ export default function DesktopPet() {
         : petVisualState === 'error'
           ? '点我查看状态'
           : session
-            ? `选中文字后按 ${preferences?.shortcut || 'Ctrl+Alt+P'}`
+            ? `选中文字后按 ${preferences?.shortcut || DEFAULT_PET_SHORTCUT}`
             : '点我聊聊'
 
   if (compactView) return <main className={`${styles.pet} ${styles.compactPet}`} data-appearance={preferences?.appearance || 'mist'}>
@@ -872,8 +888,8 @@ export default function DesktopPet() {
         </select>
       </label>
       <label>快捷键
-        <select value={preferences?.shortcut || 'Ctrl+Alt+P'} disabled={busyKey === 'preferences:update'} onChange={event => void updatePreferences({ shortcut: event.target.value as DesktopPetPreferences['shortcut'] })}>
-          <option value="Ctrl+Alt+P">Ctrl + Alt + P</option><option value="Ctrl+Shift+P">Ctrl + Shift + P</option><option value="Alt+Shift+P">Alt + Shift + P</option>
+        <select value={preferences?.shortcut || DEFAULT_PET_SHORTCUT} disabled={busyKey === 'preferences:update'} onChange={event => void updatePreferences({ shortcut: event.target.value })}>
+          {PET_SHORTCUT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </label>
       <label className={styles.reminderPreference}>复习提醒
