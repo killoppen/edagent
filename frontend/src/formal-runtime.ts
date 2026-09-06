@@ -771,7 +771,10 @@ export async function addFormalPersonalPathNode(proposal: PersonalPathNodePropos
     stage: proposal.stage,
     order: proposal.order,
     origin: 'personal',
+    sourceKind: proposal.sourceKind || 'conversation',
+    sourceLabel: proposal.sourceLabel || '',
     sourceRefs: proposal.sourceUrls,
+    semantics: proposal.semantics || [],
   }
   const edges = proposal.connections.map((connection, index) => ({
     id: `personal-edge:${proposal.id}:${connection.nodeId}:${index}`,
@@ -1458,7 +1461,18 @@ export function learnerPathStateFromFormal(overlay: FormalPathOverlay): LearnerP
     const id = String(raw.id || '')
     const title = String(raw.title || '')
     if (!id || !title) continue
-    const sourceRefs = Array.isArray(raw.sourceRefs) ? raw.sourceRefs.map(String) : []
+    const sourceRefs = Array.isArray(raw.sourceRefs)
+      ? raw.sourceRefs.map(String)
+      : Array.isArray(raw.source_refs) ? raw.source_refs.map(String) : []
+    const semantics = Array.isArray(raw.semantics)
+      ? raw.semantics.filter(item => item && typeof item === 'object').map((item: any, index) => ({
+        id: String(item.id || `personal:${id}:${index}`).slice(0, 120),
+        kind: ['official', 'personal', 'graph'].includes(String(item.kind)) ? item.kind : 'personal',
+        text: String(item.text || '').trim().slice(0, 800),
+        ...(item.sourceRef ? { sourceRef: String(item.sourceRef).slice(0, 500) } : {}),
+        ...(item.sourceLabel ? { sourceLabel: String(item.sourceLabel).slice(0, 160) } : {}),
+      })).filter((item: any) => item.text).slice(0, 12)
+      : []
     const edges = Array.isArray(raw.edges) ? raw.edges.filter(item => item && typeof item === 'object').map(item => item as any) : []
     events.push({
       id: `formal-personal-node:${id}`,
@@ -1469,14 +1483,18 @@ export function learnerPathStateFromFormal(overlay: FormalPathOverlay): LearnerP
       node: {
         id,
         title,
-        summary: String(raw.summary || ''),
+        summary: String(raw.summary || `${title}的个人学习范围与实践要点。`),
         aliases: Array.isArray(raw.aliases) ? raw.aliases.map(String) : [],
         domains: Array.isArray(raw.domains) ? raw.domains.map(String) : [],
         audiences: ['self_directed'],
         stage: ['foundation', 'core', 'domain', 'advanced', 'research'].includes(String(raw.stage)) ? raw.stage as any : 'advanced',
         order: Number(raw.order || 6),
         origin: 'personal',
+        sourceKind: ['conversation', 'tool', 'role_package', 'manual'].includes(String(raw.sourceKind || raw.source_kind))
+          ? (raw.sourceKind || raw.source_kind) as any : 'conversation',
+        sourceLabel: raw.sourceLabel ? String(raw.sourceLabel).slice(0, 160) : raw.source_label ? String(raw.source_label).slice(0, 160) : undefined,
         sourceRefs,
+        semantics: semantics.length ? semantics : [{ id: `personal:${id}`, kind: 'personal', text: `${title}的个人学习范围与实践要点。` }],
       },
       edges,
     })

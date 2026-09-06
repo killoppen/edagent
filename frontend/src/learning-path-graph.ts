@@ -8,6 +8,8 @@ import {
 } from './learning-path-retrieval.ts'
 
 export type PathNodeOrigin = 'official' | 'personal'
+export type PathNodeSourceKind = 'official_catalog' | 'conversation' | 'tool' | 'role_package' | 'manual'
+export type PathNodeSemanticKind = 'official' | 'personal' | 'graph'
 export type PathEdgeKind = 'hard_prerequisite' | 'soft_prerequisite' | 'co_learning'
 export type LearnerPathStatus = 'unmarked' | 'exploring' | 'self_reported_exposed' | 'self_reported_mastered'
 export type PathAudience = 'vocational' | 'undergraduate' | 'graduate' | 'self_directed'
@@ -21,6 +23,14 @@ export type LearningPathSource = {
   kind: 'framework' | 'university' | 'vocational' | 'emerging'
 }
 
+export type LearningPathNodeSemantic = {
+  id: string
+  kind: PathNodeSemanticKind
+  text: string
+  sourceRef?: string
+  sourceLabel?: string
+}
+
 export type LearningPathNode = {
   id: string
   title: string
@@ -31,7 +41,10 @@ export type LearningPathNode = {
   stage: PathStage
   order: number
   origin: PathNodeOrigin
+  sourceKind: PathNodeSourceKind
+  sourceLabel?: string
   sourceRefs: string[]
+  semantics: LearningPathNodeSemantic[]
   sourceProposalId?: string
 }
 
@@ -56,6 +69,9 @@ export type PersonalPathNodeProposal = {
   order: number
   sourceUrls: string[]
   sourceEvidence: PersonalPathNodeEvidenceAssessment[]
+  sourceKind?: Exclude<PathNodeSourceKind, 'official_catalog'>
+  sourceLabel?: string
+  semantics?: LearningPathNodeSemantic[]
   connections: Array<{ nodeId: string; kind: PathEdgeKind; rationale: string }>
   requiresLearnerConfirmation: true
   masteryUnchanged: true
@@ -218,7 +234,11 @@ export type LearningPathReadPacket = {
   nodes: Array<{
     id: string
     title: string
+    summary: string
     origin: PathNodeOrigin
+    sourceKind: PathNodeSourceKind
+    sourceLabel?: string
+    semantics: LearningPathNodeSemantic[]
     status: LearnerPathStatus
     stage: PathStage
     prerequisites: Array<{ id: string; title: string; kind: PathEdgeKind }>
@@ -433,7 +453,11 @@ const n = (
     ? ['undergraduate', 'graduate', 'self_directed']
     : ['undergraduate', 'self_directed'],
   summary = `${title}的核心概念、方法与基本实践。`,
-): LearningPathNode => ({ id, title, summary, aliases, domains, audiences, stage, order, origin: 'official', sourceRefs: sources })
+): LearningPathNode => ({
+  id, title, summary: summary.trim() || `${title}的核心概念、方法与基本实践。`, aliases, domains, audiences, stage, order,
+  origin: 'official', sourceKind: 'official_catalog', sourceRefs: sources,
+  semantics: [{ id: `official:${id}:summary`, kind: 'official', text: summary.trim() || `${title}的核心概念、方法与基本实践。`, sourceRef: sources[0] }],
+})
 
 export const OFFICIAL_PATH_NODES: LearningPathNode[] = [
   n('digital-literacy', '信息技术与数字素养', 0, 'foundation', ['通识', '高职'], ['计算机基础', '信息技术基础'], ['moe-vocational-2025'], ['vocational', 'undergraduate', 'self_directed']),
@@ -757,6 +781,32 @@ function normalize(value: string) {
   return value.toLowerCase().replace(/[\s·（）()_\-/]+/g, '')
 }
 
+function normalizedNodeSemantics(
+  title: string,
+  summary: string,
+  semantics: LearningPathNodeSemantic[] = [],
+  fallbackKind: PathNodeSemanticKind = 'personal',
+): LearningPathNodeSemantic[] {
+  const seen = new Set<string>()
+  const normalized = semantics.map((item, index) => ({
+    id: String(item.id || `${fallbackKind}:${index}`).slice(0, 120),
+    kind: (['official', 'personal', 'graph'].includes(item.kind) ? item.kind : fallbackKind) as PathNodeSemanticKind,
+    text: String(item.text || '').replace(/\s+/g, ' ').trim().slice(0, 800),
+    ...(item.sourceRef ? { sourceRef: String(item.sourceRef).slice(0, 500) } : {}),
+    ...(item.sourceLabel ? { sourceLabel: String(item.sourceLabel).slice(0, 160) } : {}),
+  })).filter(item => {
+    if (!item.text || seen.has(item.id)) return false
+    seen.add(item.id)
+    return true
+  }).slice(0, 12)
+  if (normalized.length) return normalized
+  return [{
+    id: `${fallbackKind}:${stableHash(title)}`,
+    kind: fallbackKind,
+    text: summary.trim() || `${title}的学习范围与实践要点。`,
+  }]
+}
+
 function unique<T>(values: T[]) {
   return [...new Set(values)]
 }
@@ -851,14 +901,16 @@ export function addPersonalPathNode(state: LearnerPathState, proposal: PersonalP
   const node: LearningPathNode = {
     id: nodeId,
     title: proposal.title.slice(0, 80),
-    summary: proposal.summary.slice(0, 260),
+    summary: proposal.summary.trim().slice(0, 260) || `${proposal.title}的个人学习范围与实践要点。`,
     aliases: proposal.aliases.slice(0, 8).map(item => item.slice(0, 60)),
     domains: proposal.domains.slice(0, 6).map(item => item.slice(0, 30)),
     audiences: ['self_directed'],
     stage: proposal.stage,
     order: Math.max(proposal.order, maxAnchorOrder + 1),
     origin: 'personal',
+    sourceKind: proposal.sourceKind || 'conversation',
     sourceRefs: proposal.sourceUrls.slice(0, 6),
+    semantics: normalizedNodeSemantics(proposal.title, proposal.summary, proposal.semantics),
     sourceProposalId: proposal.id,
   }
   const edges = proposal.connections.slice(0, 6).flatMap((connection, index) => {
@@ -930,7 +982,11 @@ function packetFromRetrieval(
   const packetNodes = contextNodes.map(node => ({
     id: node.id,
     title: node.title,
+    summary: node.summary,
     origin: node.origin,
+    sourceKind: node.sourceKind,
+    sourceLabel: node.sourceLabel,
+    semantics: node.semantics,
     status: projection.statuses[node.id] || 'unmarked' as LearnerPathStatus,
     stage: node.stage,
     prerequisites: projection.edges.filter(edge => edge.to === node.id).slice(0, 6).flatMap(edge => {
@@ -1213,7 +1269,9 @@ export function learningPathPacketToTutorContext(packet: LearningPathReadPacket)
   const nodeLines = packet.nodes.map(node => {
     const prerequisites = node.prerequisites.map(item => `${item.title}(${PATH_EDGE_LABELS[item.kind]})`).join('、') || '无已载入前置'
     const successors = node.successors.map(item => `${item.title}(${PATH_EDGE_LABELS[item.kind]})`).join('、') || '无已载入后继'
-    return `- ${node.title} [${node.origin === 'official' ? '官方' : '个人'}；${PATH_STATUS_LABELS[node.status]}]；前置：${prerequisites}；后继：${successors}`
+    const semantics = node.semantics.slice(0, 3).map(item => `${item.kind}:${item.text}`).join('；')
+    const source = node.sourceLabel ? `${node.sourceKind}/${node.sourceLabel}` : node.sourceKind
+    return `- ${node.title} [${node.origin === 'official' ? '官方' : '个人'}；来源：${source}；${PATH_STATUS_LABELS[node.status]}]；简介：${node.summary}；语义：${semantics || '暂无'}；前置：${prerequisites}；后继：${successors}`
   }).join('\n')
   return [
     '学习路径图读取结果（结构核参考投影，不是强制培养方案）：',
@@ -1387,6 +1445,15 @@ export function buildPersonalNodeProposal(
     order,
     sourceUrls: validatedUrls,
     sourceEvidence: evidenceReport.accepted,
+    sourceKind: 'tool',
+    sourceLabel: '路径检索与外部证据工具',
+    semantics: [{
+      id: `graph:${stableHash(`${packet.snapshotId}:${title}`)}`,
+      kind: 'graph',
+      text: `图谱检索将“${title}”识别为独立主题，并与已有课程节点建立待确认关系。`,
+      sourceRef: packet.snapshotId,
+      sourceLabel: '学习路径图谱检索',
+    }],
     connections,
     requiresLearnerConfirmation: true,
     masteryUnchanged: true,
@@ -1400,6 +1467,9 @@ export function validateOfficialLearningPathGraph() {
   const sourceIds = new Set(LEARNING_PATH_SOURCES.map(source => source.id))
   OFFICIAL_PATH_NODES.forEach(node => {
     if (!node.sourceRefs.length || node.sourceRefs.some(source => !sourceIds.has(source))) errors.push(`${node.id} 来源无效`)
+    if (!node.summary.trim()) errors.push(`${node.id} 缺少节点简介`)
+    if (node.origin !== 'official' || node.sourceKind !== 'official_catalog') errors.push(`${node.id} 官方节点来源类型无效`)
+    if (!node.semantics.some(semantic => semantic.kind === 'official' && semantic.text.trim())) errors.push(`${node.id} 缺少官方语义`)
   })
   const indegree = new Map(OFFICIAL_PATH_NODES.map(node => [node.id, 0]))
   const outgoing = new Map(OFFICIAL_PATH_NODES.map(node => [node.id, [] as string[]]))
@@ -1478,13 +1548,19 @@ export function sanitizeLearnerPathState(value: unknown): LearnerPathState {
     if (item.type === 'vnext_personal_path_node_added' && item.node?.origin === 'personal' && typeof item.node.id === 'string') {
       const node: LearningPathNode = {
         ...item.node,
-        id: item.node.id.slice(0, 120), title: String(item.node.title || '').slice(0, 80), summary: String(item.node.summary || '').slice(0, 260),
+        id: item.node.id.slice(0, 120), title: String(item.node.title || '').slice(0, 80), summary: String(item.node.summary || `${String(item.node.title || '个人节点')}的个人学习范围与实践要点。`).slice(0, 260),
         aliases: Array.isArray(item.node.aliases) ? item.node.aliases.slice(0, 8).map(value => String(value).slice(0, 60)) : [],
         domains: Array.isArray(item.node.domains) ? item.node.domains.slice(0, 6).map(value => String(value).slice(0, 30)) : [],
         audiences: ['self_directed'], origin: 'personal',
+        sourceKind: item.node.sourceKind && ['conversation', 'tool', 'role_package', 'manual'].includes(item.node.sourceKind) ? item.node.sourceKind : 'conversation',
         stage: item.node.stage && item.node.stage in PATH_STAGE_LABELS ? item.node.stage : 'advanced',
         order: Math.max(1, Math.min(20, Number(item.node.order) || 6)),
         sourceRefs: Array.isArray(item.node.sourceRefs) ? item.node.sourceRefs.slice(0, 6).map(value => String(value).slice(0, 500)) : [],
+        semantics: normalizedNodeSemantics(
+          String(item.node.title || '个人节点'),
+          String(item.node.summary || ''),
+          Array.isArray(item.node.semantics) ? item.node.semantics as LearningPathNodeSemantic[] : [],
+        ),
       }
       const edges = Array.isArray(item.edges) ? item.edges.slice(0, 8).filter(edge => edge?.origin === 'personal' && typeof edge.from === 'string' && typeof edge.to === 'string').map((edge, edgeIndex) => ({
         id: typeof edge.id === 'string' ? edge.id.slice(0, 160) : `restored-edge-${index}-${edgeIndex}`,

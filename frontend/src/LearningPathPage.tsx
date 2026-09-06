@@ -142,6 +142,14 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
       order: Math.max(4, anchor.order + 1),
       sourceUrls: [],
       sourceEvidence: [],
+      sourceKind: 'manual',
+      sourceLabel: '学习路径页面手动添加',
+      semantics: [{
+        id: `personal:${title}`,
+        kind: 'personal',
+        text: `学习者明确希望加入“${title}”作为个人学习目标。`,
+        sourceLabel: '学习者明确请求',
+      }],
       connections: [{ nodeId: anchor.id, kind: edgeKind, rationale: `由学习者手动关联到“${anchor.title}”` }],
       requiresLearnerConfirmation: true,
       masteryUnchanged: true,
@@ -276,6 +284,13 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
             <>
               <h2>{selected.title}</h2>
               <p>{selected.summary}</p>
+              <div className="path-node-provenance"><span>{selected.origin === 'official' ? '官方节点' : '个人节点'}</span><small>{selected.sourceKind === 'role_package' ? '岗位图谱包' : selected.sourceKind === 'tool' ? '工具生成' : selected.sourceKind === 'conversation' ? '对话提出' : selected.sourceKind === 'manual' ? '手动添加' : '官方课程目录'}</small></div>
+              {selected.semantics.length > 0 && (
+                <section className="path-node-semantics" aria-label="节点语义">
+                  <h3>节点语义</h3>
+                  {selected.semantics.map(semantic => <p key={semantic.id}><span>{semantic.kind === 'official' ? '官方' : semantic.kind === 'graph' ? '图谱' : '个人'}</span>{semantic.text}</p>)}
+                </section>
+              )}
               {audienceBridgeNodeIds.has(selected.id) && <div className="path-audience-bridge-note">它不属于“{AUDIENCE_LABELS[audience] || audience}”主课程集，但被保留为后续课程的硬前置，避免路线断裂。</div>}
               <div className="path-node-tags"><span className="path-cluster-tag" style={{ '--cluster-color': knowledgeCluster(clusterLearningPathNode(selected)).color, '--cluster-rgb': knowledgeCluster(clusterLearningPathNode(selected)).rgb } as CSSProperties}>{knowledgeCluster(clusterLearningPathNode(selected)).label}</span>{selected.domains.map(item => <span key={item}>{item}</span>)}</div>
               {activePlan && planRouteNodeIds.has(selected.id) && (

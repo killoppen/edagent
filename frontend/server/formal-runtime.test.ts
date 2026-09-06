@@ -29,7 +29,10 @@ test('formal learning-path overlay restores self-report and personal nodes witho
       domains: ['AI', '工程'],
       stage: 'advanced',
       order: 6,
-      sourceRefs: ['https://example.com/source'],
+      source_kind: 'role_package',
+      source_label: '岗位图谱包',
+      source_refs: ['https://example.com/source'],
+      semantics: [{ id: 'graph:agent-eval', kind: 'graph', text: '岗位图谱语义', sourceRef: 'role-package://agent-eval' }],
       edges: [{ id: 'edge-1', from: 'machine-learning', to: 'personal-agent-eval', kind: 'soft_prerequisite', rationale: '需要基础', origin: 'personal' }],
     }],
     plans: [{
@@ -52,6 +55,10 @@ test('formal learning-path overlay restores self-report and personal nodes witho
   const projection = projectLearnerPath(state)
   assert.equal(projection.statuses.calculus, 'self_reported_mastered')
   assert.ok(projection.personalNodeIds.includes('personal-agent-eval'))
+  const personal = projection.nodes.find(node => node.id === 'personal-agent-eval')!
+  assert.equal(personal.sourceKind, 'role_package')
+  assert.equal(personal.sourceLabel, '岗位图谱包')
+  assert.equal(personal.semantics[0].kind, 'graph')
   assert.ok(projection.edges.some(edge => edge.to === 'personal-agent-eval'))
   assert.equal(projection.activePlan?.id, 'path-plan-agent')
   assert.ok(projection.activePlan?.targetNodeIds.includes('agent-engineering'))
