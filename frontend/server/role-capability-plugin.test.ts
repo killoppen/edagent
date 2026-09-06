@@ -92,6 +92,7 @@ test('graph hub recommendation exposes an unreviewed personal graph only to its 
     assert.equal((owner.result.payload as any).recommendations.length, 1)
     assert.equal((owner.result.payload as any).recommendations[0].review, 'pending_owner')
     assert.equal(owner.result.objects?.[0].objectType, 'graph_recommendation')
+    assert.equal(owner.result.presentation?.renderer, 'role_capability_graph:graph_hub_recommendation')
     assert.match(String((owner.result.payload as any).boundary), /不写学习路径、EvidenceEvent 或五核/)
 
     await assert.rejects(loaded.execute('role_capability_graph__search_graph_hub', {
@@ -100,6 +101,30 @@ test('graph hub recommendation exposes an unreviewed personal graph only to its 
   } finally {
     if (previous === undefined) delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG
     else process.env.LEARNFLOW_GRAPH_HUB_CATALOG = previous
+  }
+})
+
+test('graph hub recommendation uses the checked-in development catalog when no catalog is configured', async () => {
+  const previousCatalog = process.env.LEARNFLOW_GRAPH_HUB_CATALOG
+  const previousRoot = process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT
+  const previousNodeEnv = process.env.NODE_ENV
+  delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG
+  delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT
+  process.env.NODE_ENV = 'test'
+  try {
+    const loaded = await registry()
+    const result = await loaded.execute('role_capability_graph__search_graph_hub', {
+      query: '大模型应用工程师', topK: 3,
+    }, executionContext)
+    assert.equal((result.result.payload as any).recommendations.length, 1)
+    assert.equal((result.result.payload as any).recommendations[0].graphId, 'learnflow:built-in-llm-app-engineer')
+  } finally {
+    if (previousCatalog === undefined) delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG
+    else process.env.LEARNFLOW_GRAPH_HUB_CATALOG = previousCatalog
+    if (previousRoot === undefined) delete process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT
+    else process.env.LEARNFLOW_GRAPH_HUB_CATALOG_ROOT = previousRoot
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousNodeEnv
   }
 })
 
@@ -312,4 +337,13 @@ test('role object cards keep the source workspace lane interaction inside the pl
   assert.match(cssSource, /flex:0 0 218px/)
   assert.match(cssSource, /flex-basis:292px/)
   assert.match(cssSource, /max-height:min\(68vh,720px\)/)
+})
+
+test('role product links use the desktop external URL bridge', () => {
+  const clientSource = readFileSync(resolve(process.cwd(), 'plugins/role_capability_graph/client.tsx'), 'utf8')
+  const desktopSource = readFileSync(resolve(process.cwd(), '../desktop/src-tauri/src/lib.rs'), 'utf8')
+  assert.match(clientSource, /openExternalProductLink/)
+  assert.match(clientSource, /invoke\('open_external_url'/)
+  assert.match(desktopSource, /fn open_external_url/)
+  assert.match(desktopSource, /starts_with\("http:\/\/"\) \|\| value\.starts_with\("https:\/\/"\)/)
 })
