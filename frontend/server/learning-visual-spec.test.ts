@@ -113,6 +113,17 @@ test('natural visual follow-ups recover a short prior topic without a domain key
   assert.deepEqual(resolved.topicAnchor, { topic: '讲一下快速排序', source: 'prior_user' })
 })
 
+test('image wording is recognized and inherits the prior topic', () => {
+  const resolved = resolveVisualRequest('生成图片', [
+    { role: 'user', content: '讲一下快速排序' },
+    { role: 'assistant', content: '快速排序通过分区递归处理子数组。' },
+    { role: 'user', content: '生成图片' },
+  ])
+  assert.equal(resolved.contextEnriched, true)
+  assert.equal(resolved.topicAnchor?.source, 'prior_user')
+  assert.match(resolved.effectiveRequest, /快速排序/)
+})
+
 test('visual-to-visual follow-ups inherit the validated artifact rather than prose guesses', () => {
   const resolved = resolveVisualRequest('做成动画', [{
     role: 'assistant', content: '这里是上一轮说明。', toolRuns: [{

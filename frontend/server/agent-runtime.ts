@@ -32,7 +32,7 @@ import {
 import type { SearchProviderConfiguration } from './computer-knowledge-search.ts'
 import type { LearningVideoCandidate } from './learning-video-harness.ts'
 import type { AgentProjectContext } from '../src/project.ts'
-import { resolveExplicitVisualIntent } from './visual-tool-execution.ts'
+import { resolveExplicitVisualIntent, resolveVisualRequest } from './visual-tool-execution.ts'
 import { AI_LATENCY_BUDGETS } from '../src/latency-budgets.ts'
 import {
   pluginObjectReferenceUri,
@@ -1005,6 +1005,10 @@ export async function runTutorAgentTurn(input: TutorAgentRuntimeInput): Promise<
   const startedAt = Date.now()
   const latestMessage = [...input.messages].reverse().find(message => message.role === 'user')?.content || ''
   const visualIntent = resolveExplicitVisualIntent(input.toolChoice, latestMessage)
+  const visualRequest = visualIntent === 'none'
+    ? undefined
+    : resolveVisualRequest(latestMessage, input.messages)
+  const visualPromptRequest = visualRequest?.effectiveRequest || latestMessage
   const budget = tutorAgentBudget(input.mode, visualIntent)
   const deadline = startedAt + budget.maxWallTimeMs
   const trajectory: AgentTrajectoryEvent[] = []
@@ -1715,7 +1719,7 @@ export async function runTutorAgentTurn(input: TutorAgentRuntimeInput): Promise<
           baseUrl: input.baseUrl,
           model: input.model,
           instructions,
-          messages: [...runtimeMessages, { role: 'user', content: visualTeachingExplanationPrompt(modality, latestMessage) }],
+          messages: [...runtimeMessages, { role: 'user', content: visualTeachingExplanationPrompt(modality, visualPromptRequest) }],
           tools: [],
           includeTools: false,
         }), deadline, false)
@@ -1734,7 +1738,7 @@ export async function runTutorAgentTurn(input: TutorAgentRuntimeInput): Promise<
             messages: [
               ...runtimeMessages,
               { role: 'assistant' as const, content: explanation, ...(explanationReasoningContent ? { reasoningContent: explanationReasoningContent } : {}) },
-              { role: 'user' as const, content: visualTeachingExplanationPrompt(modality, latestMessage, true) },
+              { role: 'user' as const, content: visualTeachingExplanationPrompt(modality, visualPromptRequest, true) },
             ],
             tools: [],
             includeTools: false,
@@ -1754,7 +1758,7 @@ export async function runTutorAgentTurn(input: TutorAgentRuntimeInput): Promise<
             baseUrl: input.baseUrl,
             model: input.model,
             instructions,
-            messages: [...runtimeMessages, { role: 'user', content: visualTeachingBriefPrompt(modality, latestMessage, explanation) }],
+            messages: [...runtimeMessages, { role: 'user', content: visualTeachingBriefPrompt(modality, visualPromptRequest, explanation) }],
             tools: [],
             includeTools: false,
             responseFormat: 'json_object',
@@ -1775,7 +1779,7 @@ export async function runTutorAgentTurn(input: TutorAgentRuntimeInput): Promise<
               messages: [
                 ...runtimeMessages,
                 { role: 'assistant', content: rawBrief, ...(rawBriefReasoningContent ? { reasoningContent: rawBriefReasoningContent } : {}) },
-                { role: 'user', content: visualTeachingBriefPrompt(modality, latestMessage, explanation, true) },
+                { role: 'user', content: visualTeachingBriefPrompt(modality, visualPromptRequest, explanation, true) },
               ],
               tools: [],
               includeTools: false,

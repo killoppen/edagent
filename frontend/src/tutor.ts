@@ -361,7 +361,7 @@ async function executeDesktopVisualTool(options: {
     const briefResponse = await runtimeFetch(`/api/agent/sessions/${options.sessionId}/visual-plans`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        instructions: visualTeachingBriefPrompt(options.kind, options.query, options.teachingExplanation),
+        instructions: visualTeachingBriefPrompt(options.kind, request.effectiveRequest, options.teachingExplanation),
         input: `以下讲解已经由正式 Tutor 独立提交。保持它的事实边界，并据此填写语义可执行 storyboard；不要在 JSON 中复制讲解：\n${options.teachingExplanation}`,
         timeout_ms: 180_000,
         max_tokens: 12_000,
@@ -373,8 +373,8 @@ async function executeDesktopVisualTool(options: {
     if (!briefResponse.ok || typeof briefPayload?.text !== 'string') {
       throw new Error('visual_teaching_brief_failed:视觉教学 Brief 服务不可用')
     }
-    const visualBrief = parseVisualTeachingBrief(briefPayload.text, options.kind, options.query, options.teachingExplanation)
-    const execution = await executeLearningVisual(options.kind, options.query, options.messages, async (
+    const visualBrief = parseVisualTeachingBrief(briefPayload.text, options.kind, request.effectiveRequest, options.teachingExplanation)
+    const execution = await executeLearningVisual(options.kind, request.effectiveRequest, options.messages, async (
       instructions, input, timeoutMs = 26_000, maxTokens = 2_200, generationOptions,
     ) => {
       const response = await runtimeFetch(`/api/agent/sessions/${options.sessionId}/visual-plans`, {
@@ -526,14 +526,34 @@ export async function requestTutorReply(options: {
       if (typeof payload?.message !== 'string' || !payload.message.trim()) throw new Error('桌面 Tutor 没有返回可显示的文本')
       // The formal Tutor reply is persisted before visual_teaching_composition
       // starts. A renderer timeout can therefore never invalidate the lesson.
-      const visualRun = visualIntent === 'none' ? undefined : await executeDesktopVisualTool({
-        sessionId: options.formalScope.sessionId,
-        kind: visualIntent,
-        query: latestUserMessage,
-        teachingExplanation: payload.message.trim(),
-        messages: options.messages,
-        signal: controller.signal,
-      })
+      let visualRun: TutorToolRun | undefined
+      if (visualIntent !== 'none') {
+        try {
+          visualRun = await executeDesktopVisualTool({
+            sessionId: options.formalScope.sessionId,
+            kind: visualIntent,
+            query: latestUserMessage,
+            teachingExplanation: payload.message.trim(),
+            messages: options.messages,
+            signal: controller.signal,
+          })
+        } catch (error) {
+          const at = Date.now()
+          const request = resolveVisualRequest(latestUserMessage, options.messages)
+          visualRun = {
+            id: `desktop-visual-failed-${at}`,
+            toolCallId: `desktop-visual-failed-${at}`,
+            toolName: visualIntent === 'animation' ? 'generate_learning_animation' : 'generate_learning_diagram',
+            kind: visualIntent === 'animation' ? 'animation' : 'image',
+            status: 'failed',
+            title: visualIntent === 'animation' ? '生成过程动画' : '生成知识图解',
+            detail: `视觉增强失败，已保留 Tutor 讲解：${String(error instanceof Error ? error.message : error).slice(0, 220)}`,
+            durationMs: 0,
+            startedAt: at,
+            inputSummary: request.effectiveRequest.slice(0, 240),
+          }
+        }
+      }
       const at = Date.now()
       return {
         reply: payload.message.trim(),
