@@ -347,3 +347,13 @@ test('role product links use the desktop external URL bridge', () => {
   assert.match(desktopSource, /fn open_external_url/)
   assert.match(desktopSource, /starts_with\("http:\/\/"\) \|\| value\.starts_with\("https:\/\/"\)/)
 })
+
+test('capability radar pans by holding and dragging its canvas', () => {
+  const clientSource = readFileSync(resolve(process.cwd(), 'plugins/role_capability_graph/client.tsx'), 'utf8')
+  const cssSource = readFileSync(resolve(process.cwd(), 'plugins/role_capability_graph/plugin.css'), 'utf8')
+  assert.match(clientSource, /onPointerDown=\{startPan\}/)
+  assert.match(clientSource, /setPointerCapture/)
+  assert.match(clientSource, /translate\(\$\{pan\.x\}px, \$\{pan\.y\}px\)/)
+  assert.match(cssSource, /touch-action:none/)
+  assert.match(cssSource, /cursor:grabbing/)
+})

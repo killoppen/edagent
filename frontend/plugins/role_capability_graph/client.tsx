@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
+import { useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from 'react'
 import {
   defineLearnFlowPluginClient,
   pluginObjectDragProps,
@@ -257,6 +257,10 @@ type RadarRing = { ring: number; label: string; objectIds: string[]; total?: num
 
 function RoleDimensionRadar({ props, radar }: { props: PluginToolRendererProps; radar: RecordValue }) {
   const [selectedId, setSelectedId] = useState(String(radar.rootId || ''))
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [dragging, setDragging] = useState(false)
+  const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
   const objects = new Map(props.objects.filter(object => object.objectType === 'role_object').map(object => [object.objectId, object]))
   const relations = props.objects.filter(object => object.objectType === 'role_relation')
   const rings = ((radar.rings || []) as RadarRing[]).filter(ring => ring.objectIds.some(id => objects.has(id)))
@@ -279,43 +283,73 @@ function RoleDimensionRadar({ props, radar }: { props: PluginToolRendererProps; 
   })
   const visibleIds = new Set(positions.keys())
   const selected = objects.get(selectedId) || objects.get(rootId)
+  const adjustZoom = (delta: number) => setZoom(current => Math.min(2.25, Math.max(.7, Number((current + delta).toFixed(2)))))
+  const startPan = (event: PointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('button, a')) return
+    panStart.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y }
+    setDragging(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const movePan = (event: PointerEvent<HTMLDivElement>) => {
+    if (!panStart.current) return
+    setPan({ x: panStart.current.panX + event.clientX - panStart.current.x, y: panStart.current.panY + event.clientY - panStart.current.y })
+  }
+  const stopPan = (event: PointerEvent<HTMLDivElement>) => {
+    panStart.current = null
+    setDragging(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
   return <div className="role-plugin-dimension-radar">
     <header><strong>岗位中心语义雷达</strong><span>{Math.max(0, rings.length - 1)} 个维度 · {Math.max(0, visibleIds.size - 1)} 个外围节点</span></header>
-    <div className="role-plugin-radar-stage" role="img" aria-label={`以${objects.get(rootId)?.label || '岗位'}为中心，按岗位边界、任务、能力、能力单元和知识技能向外展开`}>
-      <svg viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-        {rings.filter(ring => ring.ring > 0).map(ring => {
-          const radius = maxRadius * (.28 + ring.ring * .14)
-          return <circle key={ring.ring} cx={center.x} cy={center.y} r={radius} className={`ring ring-${ring.ring}`} />
+    <div
+      className="role-plugin-radar-stage"
+      role="img"
+      aria-label={`以${objects.get(rootId)?.label || '岗位'}为中心，按岗位边界、任务、能力、能力单元和知识技能向外展开`}
+      onPointerDown={startPan}
+      onPointerMove={movePan}
+      onPointerUp={stopPan}
+      onPointerCancel={stopPan}
+      onWheel={event => {
+        event.preventDefault()
+        adjustZoom(event.deltaY < 0 ? .1 : -.1)
+      }}
+    >
+      <div className={`role-plugin-radar-canvas ${dragging ? 'dragging' : ''}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+        <svg viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+          {rings.filter(ring => ring.ring > 0).map(ring => {
+            const radius = maxRadius * (.28 + ring.ring * .14)
+            return <circle key={ring.ring} cx={center.x} cy={center.y} r={radius} className={`ring ring-${ring.ring}`} />
+          })}
+          <g className="role-plugin-radar-edges">{relations.map(relationObject => {
+            const relation = dataOf(relationObject)
+            const source = positions.get(String(relation.source || ''))
+            const target = positions.get(String(relation.target || ''))
+            if (!source || !target) return null
+            return <line key={relationObject.objectId} x1={source.x} y1={source.y} x2={target.x} y2={target.y}><title>{String(relation.type || '')}</title></line>
+          })}</g>
+        </svg>
+        {rings.filter(ring => ring.ring > 0).map(ring => <span key={ring.ring} className={`role-plugin-ring-label ring-${ring.ring}`}>{ring.label}<small>{ring.objectIds.filter(id => objects.has(id)).length}{ring.total && ring.total > ring.objectIds.length ? ` / ${ring.total}` : ''}</small></span>)}
+        {[...positions].map(([objectId, position]) => {
+          const object = objects.get(objectId)
+          if (!object) return null
+          const category = categoryOf(object)
+          return <button
+            key={objectId}
+            type="button"
+            className={`role-plugin-radar-node ${position.ring === 0 ? 'root' : ''} ${selected?.objectId === objectId ? 'selected' : ''}`}
+            style={{ left: `${position.x / width * 100}%`, top: `${position.y / height * 100}%`, '--role-accent': colorFor(category) } as CSSProperties}
+            aria-label={`${object.label}，${category}`}
+            {...interactiveObjectProps(props, object)}
+            onClick={() => setSelectedId(objectId)}
+          ><i /><span>{object.label}</span></button>
         })}
-        <g className="role-plugin-radar-edges">{relations.map(relationObject => {
-          const relation = dataOf(relationObject)
-          const source = positions.get(String(relation.source || ''))
-          const target = positions.get(String(relation.target || ''))
-          if (!source || !target) return null
-          return <line key={relationObject.objectId} x1={source.x} y1={source.y} x2={target.x} y2={target.y}><title>{String(relation.type || '')}</title></line>
-        })}</g>
-      </svg>
-      {rings.filter(ring => ring.ring > 0).map(ring => <span key={ring.ring} className={`role-plugin-ring-label ring-${ring.ring}`}>{ring.label}<small>{ring.objectIds.filter(id => objects.has(id)).length}{ring.total && ring.total > ring.objectIds.length ? ` / ${ring.total}` : ''}</small></span>)}
-      {[...positions].map(([objectId, position]) => {
-        const object = objects.get(objectId)
-        if (!object) return null
-        const category = categoryOf(object)
-        return <button
-          key={objectId}
-          type="button"
-          className={`role-plugin-radar-node ${position.ring === 0 ? 'root' : ''} ${selected?.objectId === objectId ? 'selected' : ''}`}
-          style={{ left: `${position.x / width * 100}%`, top: `${position.y / height * 100}%`, '--role-accent': colorFor(category) } as CSSProperties}
-          aria-label={`${object.label}，${category}`}
-          {...interactiveObjectProps(props, object)}
-          onClick={() => setSelectedId(objectId)}
-        ><i /><span>{object.label}</span></button>
-      })}
+      </div>
     </div>
     {selected && <article className="role-plugin-radar-selection" style={{ '--role-accent': colorFor(categoryOf(selected)) } as CSSProperties} {...interactiveObjectProps(props, selected)}>
       <span>{categoryOf(selected)} · 第 {semanticRingOf(selected) ?? '—'} 环</span><strong>{selected.label}</strong><p>{String(dataOf(selected).summary || '')}</p>
       <FollowActions props={props} objectId={selected.objectId} label={selected.label} />
     </article>}
-    <footer>节点可点击查看、双击引用，也可直接拖入下方输入框。环表示岗位语义维度，不表示分数高低。</footer>
+    <footer>滚动鼠标滚轮缩放，按住空白区域拖动雷达（{Math.round(zoom * 100)}%）；节点点击查看、双击引用，也可直接拖入下方输入框。环表示岗位语义维度，不表示分数高低。</footer>
   </div>
 }
 
