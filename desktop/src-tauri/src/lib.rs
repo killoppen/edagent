@@ -848,6 +848,24 @@ fn open_desktop_main_path(
     Ok(())
 }
 
+fn allowed_external_url(url: &str) -> bool {
+    let value = url.trim();
+    value.len() <= 4096
+        && !value.chars().any(|character| character.is_control())
+        && (value.starts_with("http://") || value.starts_with("https://"))
+}
+
+#[tauri::command]
+fn open_external_url(window: WebviewWindow, url: String) -> Result<(), String> {
+    if !matches!(window.label(), "main" | "pet") {
+        return Err("只有 LearnFlow 窗口可以打开外部页面".into());
+    }
+    if !allowed_external_url(&url) {
+        return Err("外部页面必须使用有效的 HTTP 或 HTTPS 地址".into());
+    }
+    open::that(url).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn store_desktop_pet_capability(
     window: WebviewWindow,
@@ -1065,6 +1083,7 @@ pub fn run() {
             capture_desktop_pet_selection,
             close_desktop_pet,
             open_desktop_main_path,
+            open_external_url,
             store_desktop_pet_capability,
             sync_desktop_pet_session,
             desktop_pet_active_session,

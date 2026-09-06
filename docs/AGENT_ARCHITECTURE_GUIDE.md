@@ -1,5 +1,7 @@
 # LearnFlow 智能体架构与协作指南
 
+Contract impact（`2026-09-06.2`）：Role Atlas 迁入同仓后，学习路径源图使用 LearnFlow-owned `learnflow-learning-path/v1` 与 `learnflow-learning-path/v2` 双版本契约。Role Atlas 只能消费固定版本的课程图、岗位绑定和特殊节点提案，不能把岗位内容直接写入 `KernelState`、`EvidenceEvent` 或个人路线；特殊节点接收与跨产品语义挂载仍需后续正式能力。节点来源与语义兼容规则保持不变：官方目录节点有简介和官方语义，个人节点记录对话、工具、岗位图谱包或手动来源。
+
 Contract impact（`2026-09-03.3`）：桌宠选中文本入口仍由 `tutor_agent` 的 `desktop_pet_gateway` 所有。Windows 快捷键触发时先固定原前台窗口，优先本机读取用户主动选中的 Unicode 文本并恢复剪贴板；不可复制时才回退到原有前台截图和账户视觉模型。两条路径都只产生可编辑、TTL 限时的临时上下文，须用户发送后才消费一个正式 Tutor 回合，不写 AgentMessage 正文、EvidenceEvent、五核或长期记忆；快捷键、capability、API 和视觉回退保持向后兼容。
 
 Contract impact（`2026-09-03.2`）：桌宠视觉适配器使用当前账户的视觉模型配置：可独立保存加密视觉凭据，或显式回退同一账户的 Tutor 凭据；Base URL 与模型名称按账户保存。两类密钥使用不同 AAD 用途，桌宠 capability 不能读取凭据。截图仍须用户主动提供、确认并只随一个正式 Tutor 回合消费，视觉观察不构成掌握、评分、策略或五核证据。

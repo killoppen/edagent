@@ -2,7 +2,7 @@
 
 LearnFlow 是面向计算机学习的 Tutor 工作空间。产品以连续对话为主界面，在同一学习现场连接原子学习任务、项目关卡、讲义与练习、复习、学习路径和五核学习者状态。
 
-仓库现在只有一套产品前端：`frontend/`。原来的 vNext 已成为正式 LearnFlow，不再维护旧前端或第二套页面逻辑。
+仓库现在只有一套 LearnFlow 产品前端：`frontend/`。Role Atlas 作为独立岗位图谱生产子应用位于 `apps/role-atlas/`，不取代 LearnFlow 前端，也不直接写学习者状态。
 
 ## 运行
 
@@ -46,10 +46,29 @@ npm run build
 
 生成的安装包位于 `desktop/src-tauri/target/release/bundle/`，Windows 通常包含 `nsis/*.exe` 和 `msi/*.msi`。
 
+## Role Atlas
+
+Role Atlas 负责岗位图谱冷启动、迭代、审核、发布和 Graph Hub 发现；LearnFlow 只消费带固定版本与完整性身份的岗位包。两者共用同一 Git 仓库，但保持独立依赖、存储和运行边界。
+
+LearnFlow 主界面的侧栏提供 `Role Atlas` 入口。入口只打开独立的 Role Atlas 管理应用，不把岗位图谱生产逻辑或状态写入 LearnFlow；默认地址为 `http://localhost:3000/`，部署时可通过前端构建变量 `VITE_ROLE_ATLAS_URL` 覆盖。
+
+```bash
+cd apps/role-atlas
+npm ci
+npm run dev
+```
+
+迁移布局、岗位图谱静态制品和子应用测试可用以下命令验证：
+
+```bash
+make verify-role-atlas
+```
+
 ## 目录
 
 ```text
 frontend/   唯一 React + TypeScript 产品前端，以及本地 Tutor Turn Graph
+apps/role-atlas/  独立 Role Atlas 与 Graph Hub 岗位图谱应用
 backend/    FastAPI、三类 Agent 契约、学习对象、证据链与五核
 desktop/    Tauri 壳与本地 FastAPI sidecar
 docs/       架构、产品逻辑、运行手册与验证记录

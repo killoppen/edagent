@@ -986,6 +986,7 @@ test('explicit visual intent prepares animation prose before the requested visua
   const cases = [
     { message: '什么是联邦学习', expected: '' },
     { message: '画一张联邦学习流程图', expected: 'generate_learning_diagram' },
+    { message: '生成联邦学习图片', expected: 'generate_learning_diagram' },
     { message: '用动画逐步演示联邦学习聚合过程', expected: 'generate_learning_animation' },
   ]
   for (const item of cases) {

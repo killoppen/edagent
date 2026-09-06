@@ -33,7 +33,7 @@ export function resolveExplicitVisualIntent(toolChoice: TutorToolChoice, message
   if (/(?:动画|动图|逐帧|逐步演示|演示(?:一下|过程|变化)|播放(?:过程|变化)|状态(?:如何|怎么)?变化|随时间变化)/i.test(normalized)) {
     return 'animation'
   }
-  if (/(?:画(?:一张|个|出)?|图解|流程图|时序图|结构图|关系图|示意图|概念图|知识图|可视化)/i.test(normalized)) {
+  if (/(?:图片|静态图|插图|画(?:一张|个|出)?|图解|流程图|时序图|结构图|关系图|示意图|概念图|知识图|可视化)/i.test(normalized)) {
     return 'diagram'
   }
   return 'none'

@@ -35,6 +35,8 @@ PATH_STATUSES = {
     "unmarked", "exploring", "self_reported_exposed", "self_reported_mastered",
 }
 PATH_EDGE_KINDS = {"hard_prerequisite", "soft_prerequisite", "co_learning"}
+PATH_NODE_SOURCE_KINDS = {"conversation", "tool", "role_package", "manual"}
+PATH_NODE_SEMANTIC_KINDS = {"official", "personal", "graph"}
 SYNC_EVENT_TYPES = {
     "chat_mode_entered",
     "learning_action_segment_completed",
@@ -101,16 +103,45 @@ class PersonalPathNodeRequest(BaseModel):
         title = str(node.get("title") or "").strip()
         if not node_id or not title:
             raise ValueError("个人节点必须包含 id 与 title")
+        summary = str(node.get("summary") or "").strip()[:1000] or f"{title}的个人学习范围与实践要点。"
+        raw_semantics = node.get("semantics") if isinstance(node.get("semantics"), list) else []
+        semantics: list[dict[str, Any]] = []
+        seen_semantics: set[str] = set()
+        for index, raw in enumerate(raw_semantics[:12]):
+            if not isinstance(raw, dict):
+                continue
+            semantic_id = str(raw.get("id") or f"personal:{node_id}:{index}").strip()[:120]
+            text = " ".join(str(raw.get("text") or "").split())[:800]
+            if not text or semantic_id in seen_semantics:
+                continue
+            kind = str(raw.get("kind") or "personal").strip()
+            if kind not in PATH_NODE_SEMANTIC_KINDS:
+                kind = "personal"
+            item = {"id": semantic_id, "kind": kind, "text": text}
+            if raw.get("sourceRef"):
+                item["sourceRef"] = str(raw["sourceRef"])[:500]
+            if raw.get("sourceLabel"):
+                item["sourceLabel"] = str(raw["sourceLabel"])[:160]
+            semantics.append(item)
+            seen_semantics.add(semantic_id)
+        if not semantics:
+            semantics = [{"id": f"personal:{node_id}", "kind": "personal", "text": summary}]
+        source_kind = str(node.get("sourceKind") or "conversation").strip()
+        if source_kind not in PATH_NODE_SOURCE_KINDS:
+            source_kind = "conversation"
         return {
             "id": node_id[:160],
             "title": title[:200],
-            "summary": str(node.get("summary") or "")[:1000],
+            "summary": summary,
             "aliases": [str(item)[:80] for item in list(node.get("aliases") or [])[:8]],
             "domains": [str(item)[:60] for item in list(node.get("domains") or [])[:8]],
             "stage": str(node.get("stage") or "advanced")[:40],
             "order": max(0, min(int(node.get("order") or 6), 20)),
             "origin": "personal",
+            "sourceKind": source_kind,
+            "sourceLabel": str(node.get("sourceLabel") or "")[:160],
             "sourceRefs": [str(item)[:500] for item in list(node.get("sourceRefs") or [])[:8]],
+            "semantics": semantics,
         }
 
 

@@ -102,7 +102,15 @@ def test_personal_path_node_and_value_claim_use_formal_reducer(client: TestClien
             "domains": ["AI", "工程"],
             "stage": "advanced",
             "order": 6,
+            "sourceKind": "role_package",
+            "sourceLabel": "岗位图谱包：Agent 评测能力",
             "sourceRefs": ["https://example.com/agent-eval"],
+            "semantics": [{
+                "id": "graph:agent-eval",
+                "kind": "graph",
+                "text": "岗位图谱把它标记为可迁移的评测能力节点。",
+                "sourceRef": "role-package://agent-eval",
+            }],
         },
         "edges": [{
             "id": f"edge-{node_id}", "from": "agent-engineering", "to": node_id,
@@ -113,6 +121,9 @@ def test_personal_path_node_and_value_claim_use_formal_reducer(client: TestClien
     })
     assert added.status_code == 200, added.text
     assert any(item["id"] == node_id for item in added.json()["learning_path"]["personal_nodes"])
+    stored_node = next(item for item in added.json()["learning_path"]["personal_nodes"] if item["id"] == node_id)
+    assert stored_node["source_kind"] == "role_package"
+    assert stored_node["semantics"][0]["kind"] == "graph"
 
     proposal_id = f"goal-{uuid.uuid4().hex[:10]}"
     confirmed = client.post("/api/learner-state/value-claims/confirm", json={

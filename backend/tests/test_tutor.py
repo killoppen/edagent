@@ -2149,9 +2149,20 @@ def test_structured_timeout_preserves_budget_for_plain_fallback(
     client: TestClient,
     monkeypatch,
 ):
+    calls = {
+        "structured": 0,
+        "structured_cancelled": False,
+        "plain": 0,
+    }
+
     class SlowStructuredInvoker:
         async def ainvoke(self, _messages):
-            await asyncio.sleep(SLOW_MODEL_SECONDS)
+            calls["structured"] += 1
+            try:
+                await asyncio.sleep(SLOW_MODEL_SECONDS)
+            except asyncio.CancelledError:
+                calls["structured_cancelled"] = True
+                raise
 
     class FallbackModel:
         def __init__(self, **_kwargs):
@@ -2161,6 +2172,7 @@ def test_structured_timeout_preserves_budget_for_plain_fallback(
             return SlowStructuredInvoker()
 
         async def ainvoke(self, messages):
+            calls["plain"] += 1
             assert "本轮使用纯文本兼容输出" in messages[0].content
             return type("PlainResult", (), {"content": "你好，我们可以先明确今天的目标。"})()
 
@@ -2181,6 +2193,11 @@ def test_structured_timeout_preserves_budget_for_plain_fallback(
     assert time.perf_counter() - started < ABANDONED_MODEL_DEADLINE
     assert response.status_code == 200, response.text
     assert response.json()["message"] == "你好，我们可以先明确今天的目标。"
+    assert calls == {
+        "structured": 1,
+        "structured_cancelled": True,
+        "plain": 1,
+    }
 
 
 def test_empty_model_reply_uses_skill_fallback_instead_of_blank_message(

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -552,7 +553,7 @@ def test_traversal_links_protected_paths_delete_restore_and_user_isolation(tmp_p
     symlink_created = True
     try:
         (root / "outside-link.txt").symlink_to(outside)
-    except OSError:
+    except OSError as error:
         # Windows only grants SeCreateSymbolicLinkPrivilege to an elevated
         # process or with Developer Mode enabled.
         symlink_created = False

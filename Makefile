@@ -1,4 +1,4 @@
-.PHONY: start stop restart demo setup verify verify-layout
+.PHONY: start stop restart demo setup verify verify-layout verify-role-atlas
 
 # ── 启动 ──
 
@@ -38,6 +38,10 @@ lint:
 
 verify-layout:
 	@bash scripts/verify_repository_layout.sh
+
+verify-role-atlas:
+	node scripts/verify_role_atlas_layout.mjs
+	cd apps/role-atlas && npm test && npm run typecheck && npm run build
 
 verify: verify-layout
 	cd frontend && npm test && npm run build

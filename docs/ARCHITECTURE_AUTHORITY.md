@@ -1,5 +1,7 @@
 # LearnFlow 架构权威与维护边界
 
+Contract impact（`2026-09-06.2`）：Role Atlas 同仓迁移补齐 LearnFlow-owned `learnflow-learning-path/v1` 与 `learnflow-learning-path/v2` 源图契约、官方图双版本导出及严格校验。Role Atlas 只消费不可变源图、岗位绑定和特殊节点提案，不直接写学习者状态、`EvidenceEvent` 或五核；特殊节点接收、跨产品语义挂载和岗位侧 v2 matcher 仍是后续能力。此前的节点元数据合同保持兼容：官方课程节点必须携带非空简介、`official_catalog` 来源和官方语义；个人节点支持 `conversation / tool / role_package / manual` 来源及有界语义列表。
+
 Contract impact（`2026-09-03.3`）：桌宠高亮选区转录保持 `Ctrl+Alt+P` 和既有 `capture_desktop_pet_selection` 入口不变，但改为在快捷键触发瞬间记录原前台窗口，优先通过本机 `Ctrl+C` 读取 Unicode 选区并立即恢复用户剪贴板；读取不到可复制文本时，向后兼容地回退到原有前台窗口截图与账户视觉模型转录。两条路径均只在桌宠本地保留预览，发送后才进入既有 `ocr_text` TTL 上下文，不新增 Agent、能力、事件、数据库表或五核写入。
 
 Contract impact（`2026-09-03.2`）：桌宠图片视觉改为当前账户范围内的视觉模型解析。设置页可独立加密保存视觉 API Key、Base URL 与模型名，也可显式复用同一账户的 Tutor Key；独立视觉密钥使用不同 AAD 用途，桌宠 capability 不携带任何明文凭据。图片原始字节仍只在请求内存中存在，视觉输出仅是需确认、单回合消费的 `image_observation` 临时上下文，不写入 AgentMessage、EvidenceEvent、五核或长期记忆。

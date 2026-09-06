@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 
 import {
   LEARNING_PATH_SOURCES,
@@ -35,6 +35,13 @@ type Props = {
   onArchivePlan: (planId: string) => void
 }
 
+type NebulaPanState = {
+  pointerId: number
+  x: number
+  y: number
+  moved: boolean
+}
+
 const STATUS_ORDER: LearnerPathStatus[] = ['unmarked', 'exploring', 'self_reported_exposed', 'self_reported_mastered']
 const AUDIENCE_LABELS: Record<string, string> = {
   vocational: '高职', undergraduate: '本科', graduate: '研究生', self_directed: '自主学习',
@@ -47,6 +54,8 @@ function compact(value: string) {
 export default function LearningPathPage({ state, onStatusChange, onAddPersonalNode, onRemovePersonalNode, onArchivePlan }: Props) {
   const projection = useMemo(() => projectLearnerPath(state), [state])
   const canvasScrollRef = useRef<HTMLDivElement>(null)
+  const nebulaPanRef = useRef<NebulaPanState | null>(null)
+  const nebulaClickSuppressionRef = useRef(false)
   const [query, setQuery] = useState('')
   const [clusterFilter, setClusterFilter] = useState<'all' | KnowledgeClusterId>('all')
   const [audience, setAudience] = useState('全部')
@@ -55,6 +64,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
   const [focusPinned, setFocusPinned] = useState(false)
   const [showSources, setShowSources] = useState(false)
   const [zoom, setZoom] = useState(.82)
+  const [isPanning, setIsPanning] = useState(false)
   const [personalTitle, setPersonalTitle] = useState('')
   const [anchorId, setAnchorId] = useState('machine-learning')
   const [edgeKind, setEdgeKind] = useState<PathEdgeKind>('soft_prerequisite')
@@ -123,7 +133,69 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
     const left = Math.max(0, (position.x + position.width / 2) * zoom - viewport.clientWidth / 2)
     const top = Math.max(0, (position.y + position.height / 2) * zoom - viewport.clientHeight / 2)
     viewport.scrollTo({ left, top, behavior: 'smooth' })
-  }, [selected?.id, nebulaPositions, zoom])
+  }, [selected?.id, nebulaPositions])
+
+  const handleNebulaPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    const isInteractiveTarget = event.target instanceof HTMLElement && event.target.closest('button, a, input, select, textarea')
+    if (!isInteractiveTarget) event.preventDefault()
+    const viewport = event.currentTarget
+    nebulaPanRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false }
+    viewport.setPointerCapture(event.pointerId)
+    setIsPanning(true)
+  }
+
+  const handleNebulaPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = nebulaPanRef.current
+    if (!pan || pan.pointerId !== event.pointerId) return
+    event.preventDefault()
+    const viewport = event.currentTarget
+    const deltaX = event.clientX - pan.x
+    const deltaY = event.clientY - pan.y
+    const moved = pan.moved || Math.hypot(deltaX, deltaY) >= 4
+    viewport.scrollLeft -= deltaX
+    viewport.scrollTop -= deltaY
+    nebulaPanRef.current = { pointerId: pan.pointerId, x: event.clientX, y: event.clientY, moved }
+  }
+
+  const stopNebulaPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = nebulaPanRef.current
+    if (!pan || pan.pointerId !== event.pointerId) return
+    event.preventDefault()
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    if (pan.moved) {
+      nebulaClickSuppressionRef.current = true
+      globalThis.setTimeout(() => { nebulaClickSuppressionRef.current = false }, 0)
+    }
+    nebulaPanRef.current = null
+    setIsPanning(false)
+  }
+
+  const consumeNebulaClickSuppression = () => {
+    const suppressed = nebulaClickSuppressionRef.current
+    nebulaClickSuppressionRef.current = false
+    return suppressed
+  }
+
+  const handleNebulaWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey) return
+    event.preventDefault()
+    const viewport = event.currentTarget
+    const oldZoom = zoom
+    const nextZoom = Math.min(1.3, Math.max(.55, +(oldZoom * Math.exp(-event.deltaY * .0015)).toFixed(2)))
+    if (nextZoom === oldZoom) return
+    const bounds = viewport.getBoundingClientRect()
+    const localX = event.clientX - bounds.left
+    const localY = event.clientY - bounds.top
+    const contentX = (viewport.scrollLeft + localX) / oldZoom
+    const contentY = (viewport.scrollTop + localY) / oldZoom
+    setZoom(nextZoom)
+    requestAnimationFrame(() => {
+      if (canvasScrollRef.current !== viewport) return
+      viewport.scrollLeft = contentX * nextZoom - localX
+      viewport.scrollTop = contentY * nextZoom - localY
+    })
+  }
 
   const addManualNode = () => {
     const title = personalTitle.trim()
@@ -142,6 +214,14 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
       order: Math.max(4, anchor.order + 1),
       sourceUrls: [],
       sourceEvidence: [],
+      sourceKind: 'manual',
+      sourceLabel: '学习路径页面手动添加',
+      semantics: [{
+        id: `personal:${title}`,
+        kind: 'personal',
+        text: `学习者明确希望加入“${title}”作为个人学习目标。`,
+        sourceLabel: '学习者明确请求',
+      }],
       connections: [{ nodeId: anchor.id, kind: edgeKind, rationale: `由学习者手动关联到“${anchor.title}”` }],
       requiresLearnerConfirmation: true,
       masteryUnchanged: true,
@@ -199,10 +279,18 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
           )}
 
           <div className="path-canvas-toolbar">
-            <div><strong>学习星图</strong><span>基础 → 核心 → 方向 → 高阶 → 产出</span></div>
+            <div><strong>学习星图</strong><span>基础 → 核心 → 方向 → 高阶 → 产出 · 滚轮上下滑动，Ctrl+滚轮缩放，按住空白区域拖动</span></div>
             <div className="path-canvas-actions"><button type="button" className={!focusPinned ? 'active' : ''} onClick={() => setFocusPinned(false)}>全图</button><button type="button" className={focusPinned ? 'active' : ''} disabled={!selected} onClick={() => setFocusPinned(true)}>聚焦</button><i /><button type="button" onClick={() => setZoom(value => Math.max(.55, +(value - .1).toFixed(2)))} aria-label="缩小星图">−</button><span>{Math.round(zoom * 100)}%</span><button type="button" onClick={() => setZoom(value => Math.min(1.3, +(value + .1).toFixed(2)))} aria-label="放大星图">＋</button></div>
           </div>
-          <div className="path-canvas-scroll" ref={canvasScrollRef}>
+          <div
+            className={`path-canvas-scroll${isPanning ? ' is-panning' : ''}`}
+            ref={canvasScrollRef}
+            onWheel={handleNebulaWheel}
+            onPointerDown={handleNebulaPointerDown}
+            onPointerMove={handleNebulaPointerMove}
+            onPointerUp={stopNebulaPan}
+            onPointerCancel={stopNebulaPan}
+          >
             <div className="path-zoom-stage" style={{ width: NEBULA_WIDTH * zoom, height: nebulaCanvasHeight * zoom }}>
             <div className="path-canvas path-nebula" style={{ width: NEBULA_WIDTH, height: nebulaCanvasHeight, transform: `scale(${zoom})` }}>
               <div className="nebula-field-label"><span>LEARNING CONSTELLATION</span><strong>语义成团，阶段成路</strong><small>悬停看一跳 · 点击固定完整前置与后继链</small></div>
@@ -217,7 +305,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
                   key={cluster.id}
                   className={`nebula-cluster${clusterFilter === cluster.id ? ' nebula-cluster-active' : ''}${clusterFilter !== 'all' && clusterFilter !== cluster.id ? ' nebula-cluster-muted' : ''}`}
                   style={{ left: clusterBounds.get(cluster.id)!.x, top: clusterBounds.get(cluster.id)!.y, width: clusterBounds.get(cluster.id)!.width, height: clusterBounds.get(cluster.id)!.height, '--cluster-color': cluster.color, '--cluster-rgb': cluster.rgb } as CSSProperties}
-                  onClick={() => { setClusterFilter(current => current === cluster.id ? 'all' : cluster.id); setFocusPinned(false) }}
+                  onClick={() => { if (consumeNebulaClickSuppression()) return; setClusterFilter(current => current === cluster.id ? 'all' : cluster.id); setFocusPinned(false) }}
                 >
                   <span>{cluster.label}</span><small>{cluster.caption}</small><i>{clusterCounts[cluster.id]}</i>
                 </button>
@@ -252,7 +340,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
                     key={node.id}
                     className={`path-node path-node-${status}${node.origin === 'personal' ? ' path-node-personal' : ''}${audienceBridge ? ' path-node-audience-bridge' : ''}${planRole ? ` path-node-plan-${planRole}` : ''}${selected?.id === node.id ? ' path-node-selected' : ''}${focusId && !focusTrace?.nodes.has(node.id) && !planRole ? ' path-node-muted' : ''}${focusTrace?.upstream.has(node.id) && node.id !== focusId ? ' path-node-upstream' : ''}${focusTrace?.downstream.has(node.id) && node.id !== focusId ? ' path-node-downstream' : ''}${node.title.length > 10 ? ' path-node-long-title' : ''}`}
                     style={{ left: position.x, top: position.y, width: position.width, height: position.height, '--cluster-color': cluster.color, '--cluster-rgb': cluster.rgb } as CSSProperties}
-                    onClick={() => selectAndFocus(node.id)}
+                    onClick={() => { if (consumeNebulaClickSuppression()) return; selectAndFocus(node.id) }}
                     onMouseEnter={() => setHoveredId(node.id)}
                     onMouseLeave={() => setHoveredId(undefined)}
                     title={`${node.title} · ${cluster.label} · ${audienceBridge ? `${AUDIENCE_LABELS[audience] || audience}路线所需前置` : planRole === 'target' ? '规划目标' : planRole === 'milestone' ? '路线里程碑' : planRole === 'route' ? '规划路线' : PATH_STATUS_LABELS[status]}`}
@@ -276,6 +364,13 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
             <>
               <h2>{selected.title}</h2>
               <p>{selected.summary}</p>
+              <div className="path-node-provenance"><span>{selected.origin === 'official' ? '官方节点' : '个人节点'}</span><small>{selected.sourceKind === 'role_package' ? '岗位图谱包' : selected.sourceKind === 'tool' ? '工具生成' : selected.sourceKind === 'conversation' ? '对话提出' : selected.sourceKind === 'manual' ? '手动添加' : '官方课程目录'}</small></div>
+              {selected.semantics.length > 0 && (
+                <section className="path-node-semantics" aria-label="节点语义">
+                  <h3>节点语义</h3>
+                  {selected.semantics.map(semantic => <p key={semantic.id}><span>{semantic.kind === 'official' ? '官方' : semantic.kind === 'graph' ? '图谱' : '个人'}</span>{semantic.text}</p>)}
+                </section>
+              )}
               {audienceBridgeNodeIds.has(selected.id) && <div className="path-audience-bridge-note">它不属于“{AUDIENCE_LABELS[audience] || audience}”主课程集，但被保留为后续课程的硬前置，避免路线断裂。</div>}
               <div className="path-node-tags"><span className="path-cluster-tag" style={{ '--cluster-color': knowledgeCluster(clusterLearningPathNode(selected)).color, '--cluster-rgb': knowledgeCluster(clusterLearningPathNode(selected)).rgb } as CSSProperties}>{knowledgeCluster(clusterLearningPathNode(selected)).label}</span>{selected.domains.map(item => <span key={item}>{item}</span>)}</div>
               {activePlan && planRouteNodeIds.has(selected.id) && (

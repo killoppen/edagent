@@ -8,7 +8,7 @@ import {
   type PluginJson,
   type PluginToolResult,
 } from '../../src/plugin-api.ts'
-const { ROLE_CAPABILITY_PLUGIN, ROLE_OBJECT_SCHEMA_VERSION } = await import(
+const { ROLE_CAPABILITY_PLUGIN, ROLE_OBJECT_SCHEMA_VERSION, ROLE_RENDERERS } = await import(
   versionedPluginModuleUrl('./shared.ts', import.meta.url)
 ) as typeof import('./shared.ts')
 
@@ -171,6 +171,7 @@ export async function recommendGraphHubEntries(input: {
       ? `图谱 Hub 找到 ${selected.length} 个与“${input.query}”相关且当前主体可见的图谱。`
       : `图谱 Hub 没有找到与“${input.query}”相关且当前主体可见的图谱。`,
     objects,
+    presentation: { renderer: ROLE_RENDERERS.graphHub, state: { query: input.query, graphTypes: input.graphTypes || [] } },
     payload: {
       protocol: 'learnflow.graph-hub-recommendation.v1',
       query: input.query,

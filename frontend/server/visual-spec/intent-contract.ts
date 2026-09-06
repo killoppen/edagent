@@ -5,6 +5,7 @@ const VISUAL_INSTRUCTION_WORDS = /(?:我希望你|我想要|我想|希望|想要
 const GENERIC_VISUAL_TERMS = new Set([
   'input', 'output', 'process', 'step', 'state', 'example', 'diagram', 'animation',
   '输入', '输出', '处理', '阶段', '状态', '示例', '过程', '流程', '步骤', '变化',
+  '图片', '静态图', '插图',
 ])
 
 function compact(value: unknown, limit = 2200) {

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from 'react'
 import {
   defineLearnFlowPluginClient,
   pluginObjectDragProps,
@@ -8,6 +8,13 @@ import { ROLE_CAPABILITY_PLUGIN, ROLE_RENDERERS } from './shared.ts'
 import './plugin.css'
 
 type RecordValue = Record<string, any>
+
+function openExternalProductLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
+  if (!('__TAURI_INTERNALS__' in window)) return
+  event.preventDefault()
+  void import('@tauri-apps/api/core').then(({ invoke }) => invoke('open_external_url', { url }))
+    .catch(() => window.open(url, '_blank', 'noopener,noreferrer'))
+}
 
 function dataOf(object: PluginToolRendererProps['objects'][number]) {
   const value = object.value as RecordValue
@@ -250,6 +257,10 @@ type RadarRing = { ring: number; label: string; objectIds: string[]; total?: num
 
 function RoleDimensionRadar({ props, radar }: { props: PluginToolRendererProps; radar: RecordValue }) {
   const [selectedId, setSelectedId] = useState(String(radar.rootId || ''))
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [dragging, setDragging] = useState(false)
+  const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
   const objects = new Map(props.objects.filter(object => object.objectType === 'role_object').map(object => [object.objectId, object]))
   const relations = props.objects.filter(object => object.objectType === 'role_relation')
   const rings = ((radar.rings || []) as RadarRing[]).filter(ring => ring.objectIds.some(id => objects.has(id)))
@@ -272,43 +283,73 @@ function RoleDimensionRadar({ props, radar }: { props: PluginToolRendererProps; 
   })
   const visibleIds = new Set(positions.keys())
   const selected = objects.get(selectedId) || objects.get(rootId)
+  const adjustZoom = (delta: number) => setZoom(current => Math.min(2.25, Math.max(.7, Number((current + delta).toFixed(2)))))
+  const startPan = (event: PointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('button, a')) return
+    panStart.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y }
+    setDragging(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const movePan = (event: PointerEvent<HTMLDivElement>) => {
+    if (!panStart.current) return
+    setPan({ x: panStart.current.panX + event.clientX - panStart.current.x, y: panStart.current.panY + event.clientY - panStart.current.y })
+  }
+  const stopPan = (event: PointerEvent<HTMLDivElement>) => {
+    panStart.current = null
+    setDragging(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
   return <div className="role-plugin-dimension-radar">
     <header><strong>岗位中心语义雷达</strong><span>{Math.max(0, rings.length - 1)} 个维度 · {Math.max(0, visibleIds.size - 1)} 个外围节点</span></header>
-    <div className="role-plugin-radar-stage" role="img" aria-label={`以${objects.get(rootId)?.label || '岗位'}为中心，按岗位边界、任务、能力、能力单元和知识技能向外展开`}>
-      <svg viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-        {rings.filter(ring => ring.ring > 0).map(ring => {
-          const radius = maxRadius * (.28 + ring.ring * .14)
-          return <circle key={ring.ring} cx={center.x} cy={center.y} r={radius} className={`ring ring-${ring.ring}`} />
+    <div
+      className="role-plugin-radar-stage"
+      role="img"
+      aria-label={`以${objects.get(rootId)?.label || '岗位'}为中心，按岗位边界、任务、能力、能力单元和知识技能向外展开`}
+      onPointerDown={startPan}
+      onPointerMove={movePan}
+      onPointerUp={stopPan}
+      onPointerCancel={stopPan}
+      onWheel={event => {
+        event.preventDefault()
+        adjustZoom(event.deltaY < 0 ? .1 : -.1)
+      }}
+    >
+      <div className={`role-plugin-radar-canvas ${dragging ? 'dragging' : ''}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+        <svg viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+          {rings.filter(ring => ring.ring > 0).map(ring => {
+            const radius = maxRadius * (.28 + ring.ring * .14)
+            return <circle key={ring.ring} cx={center.x} cy={center.y} r={radius} className={`ring ring-${ring.ring}`} />
+          })}
+          <g className="role-plugin-radar-edges">{relations.map(relationObject => {
+            const relation = dataOf(relationObject)
+            const source = positions.get(String(relation.source || ''))
+            const target = positions.get(String(relation.target || ''))
+            if (!source || !target) return null
+            return <line key={relationObject.objectId} x1={source.x} y1={source.y} x2={target.x} y2={target.y}><title>{String(relation.type || '')}</title></line>
+          })}</g>
+        </svg>
+        {rings.filter(ring => ring.ring > 0).map(ring => <span key={ring.ring} className={`role-plugin-ring-label ring-${ring.ring}`}>{ring.label}<small>{ring.objectIds.filter(id => objects.has(id)).length}{ring.total && ring.total > ring.objectIds.length ? ` / ${ring.total}` : ''}</small></span>)}
+        {[...positions].map(([objectId, position]) => {
+          const object = objects.get(objectId)
+          if (!object) return null
+          const category = categoryOf(object)
+          return <button
+            key={objectId}
+            type="button"
+            className={`role-plugin-radar-node ${position.ring === 0 ? 'root' : ''} ${selected?.objectId === objectId ? 'selected' : ''}`}
+            style={{ left: `${position.x / width * 100}%`, top: `${position.y / height * 100}%`, '--role-accent': colorFor(category) } as CSSProperties}
+            aria-label={`${object.label}，${category}`}
+            {...interactiveObjectProps(props, object)}
+            onClick={() => setSelectedId(objectId)}
+          ><i /><span>{object.label}</span></button>
         })}
-        <g className="role-plugin-radar-edges">{relations.map(relationObject => {
-          const relation = dataOf(relationObject)
-          const source = positions.get(String(relation.source || ''))
-          const target = positions.get(String(relation.target || ''))
-          if (!source || !target) return null
-          return <line key={relationObject.objectId} x1={source.x} y1={source.y} x2={target.x} y2={target.y}><title>{String(relation.type || '')}</title></line>
-        })}</g>
-      </svg>
-      {rings.filter(ring => ring.ring > 0).map(ring => <span key={ring.ring} className={`role-plugin-ring-label ring-${ring.ring}`}>{ring.label}<small>{ring.objectIds.filter(id => objects.has(id)).length}{ring.total && ring.total > ring.objectIds.length ? ` / ${ring.total}` : ''}</small></span>)}
-      {[...positions].map(([objectId, position]) => {
-        const object = objects.get(objectId)
-        if (!object) return null
-        const category = categoryOf(object)
-        return <button
-          key={objectId}
-          type="button"
-          className={`role-plugin-radar-node ${position.ring === 0 ? 'root' : ''} ${selected?.objectId === objectId ? 'selected' : ''}`}
-          style={{ left: `${position.x / width * 100}%`, top: `${position.y / height * 100}%`, '--role-accent': colorFor(category) } as CSSProperties}
-          aria-label={`${object.label}，${category}`}
-          {...interactiveObjectProps(props, object)}
-          onClick={() => setSelectedId(objectId)}
-        ><i /><span>{object.label}</span></button>
-      })}
+      </div>
     </div>
     {selected && <article className="role-plugin-radar-selection" style={{ '--role-accent': colorFor(categoryOf(selected)) } as CSSProperties} {...interactiveObjectProps(props, selected)}>
       <span>{categoryOf(selected)} · 第 {semanticRingOf(selected) ?? '—'} 环</span><strong>{selected.label}</strong><p>{String(dataOf(selected).summary || '')}</p>
       <FollowActions props={props} objectId={selected.objectId} label={selected.label} />
     </article>}
-    <footer>节点可点击查看、双击引用，也可直接拖入下方输入框。环表示岗位语义维度，不表示分数高低。</footer>
+    <footer>滚动鼠标滚轮缩放，按住空白区域拖动雷达（{Math.round(zoom * 100)}%）；节点点击查看、双击引用，也可直接拖入下方输入框。环表示岗位语义维度，不表示分数高低。</footer>
   </div>
 }
 
@@ -520,11 +561,11 @@ function PackageCatalog(props: PluginToolRendererProps) {
   } as Record<string, string>)[String(item.sourceKind || '')] || '可用岗位包'
   return <section className="role-plugin-view role-plugin-catalog" aria-label="岗位包目录">
     <header><strong>{isNotFound ? '暂未找到可用岗位包' : '可引用岗位包'}</strong><small>{String(payload.count || 0)} 个匹配版本</small></header>
-    {isNotFound && <article className="role-plugin-empty"><span>继续查找或研究</span><strong>{String(payload.requestedRole || '新岗位')}</strong><p>当前插件目录里没有匹配的不可变岗位包。你可以先去共享 Graph Hub 查看其他已发布图谱，也可以进入 Role Atlas 为该岗位做研究和冷启动。</p><div className="role-plugin-actions">{payload.graphHubBrowseUrl && <a href={String(payload.graphHubBrowseUrl)} target="_blank" rel="noreferrer">打开 Graph Hub ↗</a>}{payload.roleAgentResearchUrl && <a href={String(payload.roleAgentResearchUrl)} target="_blank" rel="noreferrer">进入 Role Atlas 研究 ↗</a>}</div></article>}
+    {isNotFound && <article className="role-plugin-empty"><span>继续查找或研究</span><strong>{String(payload.requestedRole || '新岗位')}</strong><p>当前插件目录里没有匹配的不可变岗位包。你可以先去共享 Graph Hub 查看其他已发布图谱，也可以进入 Role Atlas 为该岗位做研究和冷启动。</p><div className="role-plugin-actions">{payload.graphHubBrowseUrl && <a href={String(payload.graphHubBrowseUrl)} target="_blank" rel="noreferrer" onClick={event => openExternalProductLink(event, String(payload.graphHubBrowseUrl))}>打开 Graph Hub ↗</a>}{payload.roleAgentResearchUrl && <a href={String(payload.roleAgentResearchUrl)} target="_blank" rel="noreferrer" onClick={event => openExternalProductLink(event, String(payload.roleAgentResearchUrl))}>进入 Role Atlas 研究 ↗</a>}</div></article>}
     {(payload.packages || []).map((item: RecordValue) => <article key={`${String(item.packageId)}@${String(item.packageVersion)}`}><span>{sourceLabel(item)} · {String(item.roleTitle)}</span><strong>v{String(item.packageVersion)}</strong><p>{String(item.snapshotAsOf)} · <code>{String(item.snapshotId)}</code></p>{props.onPrompt && <button type="button" onClick={() => props.onPrompt?.(`引用这个岗位包。请调用 reference_role_package，并原样使用以下身份：packageId=${String(item.packageId)}；packageVersion=${String(item.packageVersion)}；snapshotId=${String(item.snapshotId)}；rootHash=${String(item.rootHash)}`)}>引用此岗位包</button>}</article>)}
     {payload.simulation && <p className="role-plugin-warning">{String(payload.simulation)}</p>}
     {Array.isArray(payload.warnings) && payload.warnings.length > 0 && <p className="role-plugin-warning">另有 {payload.warnings.length} 个 role-agent 目录项未通过协议校验，因此没有加入可引用列表。</p>}
-    {!isNotFound && payload.graphHubBrowseUrl && <div className="role-plugin-actions"><a href={String(payload.graphHubBrowseUrl)} target="_blank" rel="noreferrer">在 Graph Hub 查看更多图谱 ↗</a></div>}
+    {!isNotFound && payload.graphHubBrowseUrl && <div className="role-plugin-actions"><a href={String(payload.graphHubBrowseUrl)} target="_blank" rel="noreferrer" onClick={event => openExternalProductLink(event, String(payload.graphHubBrowseUrl))}>在 Graph Hub 查看更多图谱 ↗</a></div>}
     <p className="role-plugin-boundary">{isNotFound ? 'Graph Hub 负责跨产品发现；Role Atlas 负责岗位包研究与迭代；LearnFlow 负责学习对话和个人学习状态。' : '选择动作会固定不可变版本，但不会安装、修改或发布岗位包。'}</p>
   </section>
 }
@@ -586,6 +627,47 @@ function AuditPanel(props: PluginToolRendererProps) {
   )
 }
 
+const GRAPH_TYPE_LABELS: Record<string, string> = {
+  learning_path: '学习路径', role_semantic: '岗位语义', role_process: '工作过程', knowledge: '知识图谱', custom: '自定义图谱',
+}
+
+function GraphHubRecommendation(props: PluginToolRendererProps) {
+  const payload = (props.result.payload || {}) as RecordValue
+  const recommendations = useMemo(() => {
+    const values = Array.isArray(payload.recommendations) && payload.recommendations.length
+      ? payload.recommendations
+      : props.objects.map(object => object.value as RecordValue)
+    return values.filter(value => value && typeof value === 'object')
+  }, [payload.recommendations, props.objects])
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [textFilter, setTextFilter] = useState('')
+  const types = useMemo(() => [...new Set(recommendations.map(item => String(item.graphType || 'custom')))], [recommendations])
+  const filtered = useMemo(() => {
+    const query = textFilter.trim().toLocaleLowerCase()
+    return recommendations.filter(item => {
+      if (typeFilter !== 'all' && String(item.graphType) !== typeFilter) return false
+      if (!query) return true
+      return [item.title, item.summary, ...(Array.isArray(item.keywords) ? item.keywords : []), ...(Array.isArray(item.matchedNodes) ? item.matchedNodes.flatMap((node: RecordValue) => [node.label, node.summary]) : [])]
+        .join(' ').toLocaleLowerCase().includes(query)
+    })
+  }, [recommendations, textFilter, typeFilter])
+  return <section className="role-plugin-view role-plugin-hub" aria-label="图谱推荐结果">
+    <header className="role-plugin-hub-header"><div><span>GRAPH HUB</span><strong>图谱推荐</strong><small>{String(payload.query || '')}</small></div><label>筛选结果<input value={textFilter} onChange={event => setTextFilter(event.target.value)} placeholder="按名称或节点筛选" /></label></header>
+    <nav className="role-plugin-hub-filters" aria-label="图谱类型筛选">
+      <button type="button" aria-pressed={typeFilter === 'all'} onClick={() => setTypeFilter('all')}>全部 <b>{recommendations.length}</b></button>
+      {types.map(type => <button type="button" key={type} aria-pressed={typeFilter === type} onClick={() => setTypeFilter(type)}>{GRAPH_TYPE_LABELS[type] || type} <b>{recommendations.filter(item => String(item.graphType) === type).length}</b></button>)}
+    </nav>
+    {filtered.length ? <div className="role-plugin-hub-grid">{filtered.map(item => <article key={`${String(item.graphId)}@${String(item.graphVersion)}`}>
+      <header><span>{GRAPH_TYPE_LABELS[String(item.graphType)] || String(item.graphType || '自定义图谱')}</span><strong>{String(item.title || '未命名图谱')}</strong><small>匹配度 {String(item.score ?? '—')}</small></header>
+      <p>{String(item.summary || '暂无图谱简介。')}</p>
+      <div className="role-plugin-hub-meta"><span>{item.review === 'official' ? '官方' : item.review === 'approved' ? '已审核' : '主体可见'}</span><span>{item.access === 'owner' ? '仅所有者' : '公开可见'}</span><code>{String(item.graphId || '')}@{String(item.graphVersion || '')}</code></div>
+      {Array.isArray(item.matchedNodes) && item.matchedNodes.length > 0 && <details><summary>命中节点 {item.matchedNodes.length}</summary><ul>{item.matchedNodes.map((node: RecordValue) => <li key={String(node.id)}><strong>{String(node.label || node.id)}</strong><small>{String(node.summary || '')}</small></li>)}</ul></details>}
+      {props.onPrompt && <button type="button" onClick={() => props.onPrompt?.(`继续围绕图谱“${String(item.title || '')}”检索相关学习内容`)}>继续检索</button>}
+    </article>)}</div> : <p className="role-plugin-card-empty">没有匹配当前筛选条件的图谱。</p>}
+    <footer className="role-plugin-hub-footer">当前可见 {String(payload.coverage?.visibleGraphs ?? recommendations.length)} 个图谱 · 返回 {filtered.length} 个 · 结果仅用于发现，不会自动引用或修改图谱。</footer>
+  </section>
+}
+
 const plugin = defineLearnFlowPluginClient({
   pluginId: ROLE_CAPABILITY_PLUGIN.id,
   name: ROLE_CAPABILITY_PLUGIN.name,
@@ -603,6 +685,7 @@ const plugin = defineLearnFlowPluginClient({
     [ROLE_RENDERERS.packageReference]: PackageReference,
     [ROLE_RENDERERS.comparison]: PackageComparison,
     [ROLE_RENDERERS.nodeRisk]: NodeRiskResearch,
+    [ROLE_RENDERERS.graphHub]: GraphHubRecommendation,
   },
 })
 

@@ -53,6 +53,7 @@ test('official graph is sourced, broad, and acyclic', () => {
   assert.ok(OFFICIAL_PATH_NODES.some((node) => node.audiences.includes('graduate')))
   assert.ok(OFFICIAL_PATH_NODES.some((node) => node.id === 'agent-engineering'))
   assert.ok(OFFICIAL_PATH_NODES.every((node) => node.sourceRefs.length > 0))
+  assert.ok(OFFICIAL_PATH_NODES.every((node) => node.summary.trim() && node.semantics.some(semantic => semantic.kind === 'official')))
 })
 
 test('vocational computer and information technology pathways expose job-facing core courses', () => {
@@ -152,6 +153,9 @@ test('a graph gap becomes a confirmable personal node and remains removable', ()
   const projection = projectLearnerPath(added)
   const personal = projection.nodes.find((node) => node.sourceProposalId === proposal!.id)
   assert.ok(personal)
+  assert.equal(personal!.sourceKind, 'tool')
+  assert.ok(personal!.semantics.some(semantic => semantic.kind === 'graph'))
+  assert.ok(personal!.summary.length > 0)
   assert.ok(projection.edges.some((edge) => edge.to === personal!.id))
 
   const removed = removePersonalPathNode(added, personal!.id)
