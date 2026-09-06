@@ -39,6 +39,7 @@ type NebulaPanState = {
   pointerId: number
   x: number
   y: number
+  moved: boolean
 }
 
 const STATUS_ORDER: LearnerPathStatus[] = ['unmarked', 'exploring', 'self_reported_exposed', 'self_reported_mastered']
@@ -54,6 +55,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
   const projection = useMemo(() => projectLearnerPath(state), [state])
   const canvasScrollRef = useRef<HTMLDivElement>(null)
   const nebulaPanRef = useRef<NebulaPanState | null>(null)
+  const nebulaClickSuppressionRef = useRef(false)
   const [query, setQuery] = useState('')
   const [clusterFilter, setClusterFilter] = useState<'all' | KnowledgeClusterId>('all')
   const [audience, setAudience] = useState('全部')
@@ -134,9 +136,10 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
   }, [selected?.id, nebulaPositions])
 
   const handleNebulaPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || (event.target instanceof HTMLElement && event.target.closest('button, a, input, select, textarea'))) return
+    if (event.button !== 0) return
+    event.preventDefault()
     const viewport = event.currentTarget
-    nebulaPanRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+    nebulaPanRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false }
     viewport.setPointerCapture(event.pointerId)
     setIsPanning(true)
   }
@@ -144,18 +147,33 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
   const handleNebulaPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const pan = nebulaPanRef.current
     if (!pan || pan.pointerId !== event.pointerId) return
+    event.preventDefault()
     const viewport = event.currentTarget
-    viewport.scrollLeft -= event.clientX - pan.x
-    viewport.scrollTop -= event.clientY - pan.y
-    nebulaPanRef.current = { pointerId: pan.pointerId, x: event.clientX, y: event.clientY }
+    const deltaX = event.clientX - pan.x
+    const deltaY = event.clientY - pan.y
+    const moved = pan.moved || Math.hypot(deltaX, deltaY) >= 4
+    viewport.scrollLeft -= deltaX
+    viewport.scrollTop -= deltaY
+    nebulaPanRef.current = { pointerId: pan.pointerId, x: event.clientX, y: event.clientY, moved }
   }
 
   const stopNebulaPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     const pan = nebulaPanRef.current
     if (!pan || pan.pointerId !== event.pointerId) return
+    event.preventDefault()
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    if (pan.moved) {
+      nebulaClickSuppressionRef.current = true
+      globalThis.setTimeout(() => { nebulaClickSuppressionRef.current = false }, 0)
+    }
     nebulaPanRef.current = null
     setIsPanning(false)
+  }
+
+  const consumeNebulaClickSuppression = () => {
+    const suppressed = nebulaClickSuppressionRef.current
+    nebulaClickSuppressionRef.current = false
+    return suppressed
   }
 
   const handleNebulaWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
@@ -285,7 +303,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
                   key={cluster.id}
                   className={`nebula-cluster${clusterFilter === cluster.id ? ' nebula-cluster-active' : ''}${clusterFilter !== 'all' && clusterFilter !== cluster.id ? ' nebula-cluster-muted' : ''}`}
                   style={{ left: clusterBounds.get(cluster.id)!.x, top: clusterBounds.get(cluster.id)!.y, width: clusterBounds.get(cluster.id)!.width, height: clusterBounds.get(cluster.id)!.height, '--cluster-color': cluster.color, '--cluster-rgb': cluster.rgb } as CSSProperties}
-                  onClick={() => { setClusterFilter(current => current === cluster.id ? 'all' : cluster.id); setFocusPinned(false) }}
+                  onClick={() => { if (consumeNebulaClickSuppression()) return; setClusterFilter(current => current === cluster.id ? 'all' : cluster.id); setFocusPinned(false) }}
                 >
                   <span>{cluster.label}</span><small>{cluster.caption}</small><i>{clusterCounts[cluster.id]}</i>
                 </button>
@@ -320,7 +338,7 @@ export default function LearningPathPage({ state, onStatusChange, onAddPersonalN
                     key={node.id}
                     className={`path-node path-node-${status}${node.origin === 'personal' ? ' path-node-personal' : ''}${audienceBridge ? ' path-node-audience-bridge' : ''}${planRole ? ` path-node-plan-${planRole}` : ''}${selected?.id === node.id ? ' path-node-selected' : ''}${focusId && !focusTrace?.nodes.has(node.id) && !planRole ? ' path-node-muted' : ''}${focusTrace?.upstream.has(node.id) && node.id !== focusId ? ' path-node-upstream' : ''}${focusTrace?.downstream.has(node.id) && node.id !== focusId ? ' path-node-downstream' : ''}${node.title.length > 10 ? ' path-node-long-title' : ''}`}
                     style={{ left: position.x, top: position.y, width: position.width, height: position.height, '--cluster-color': cluster.color, '--cluster-rgb': cluster.rgb } as CSSProperties}
-                    onClick={() => selectAndFocus(node.id)}
+                    onClick={() => { if (consumeNebulaClickSuppression()) return; selectAndFocus(node.id) }}
                     onMouseEnter={() => setHoveredId(node.id)}
                     onMouseLeave={() => setHoveredId(undefined)}
                     title={`${node.title} · ${cluster.label} · ${audienceBridge ? `${AUDIENCE_LABELS[audience] || audience}路线所需前置` : planRole === 'target' ? '规划目标' : planRole === 'milestone' ? '路线里程碑' : planRole === 'route' ? '规划路线' : PATH_STATUS_LABELS[status]}`}
